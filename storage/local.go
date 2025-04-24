@@ -167,7 +167,7 @@ func (s *LocalStorage) List() ([]FileInfo, error) {
 func (s *LocalStorage) Exists(id string) (bool, error) {
 	_, err := s.findFilePathById(id)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if os.IsNotExist(err) || strings.Contains(err.Error(), "not found") {
 			return false, nil
 		}
 		return false, err
