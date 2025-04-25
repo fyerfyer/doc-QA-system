@@ -2,89 +2,133 @@ package embedding
 
 import (
 	"context"
-	"errors"
 	"time"
 )
 
-// 常见的错误定义
-var (
-	ErrEmptyText     = errors.New("empty text for embedding")
-	ErrBatchTooLarge = errors.New("batch size exceeds maximum allowed")
-	ErrRateLimited   = errors.New("embedding API rate limited")
-)
-
-// Client 嵌入向量客户端接口
+// Client 嵌入模型客户端接口
 // 负责将文本转换为向量表示
 type Client interface {
-	// Embed 将单个文本转换为向量
+	// Embed 生成单条文本的向量表示
 	Embed(ctx context.Context, text string) ([]float32, error)
 
-	// EmbedBatch 批量将多个文本转换为向量
+	// EmbedBatch 批量生成多条文本的向量表示
 	EmbedBatch(ctx context.Context, texts []string) ([][]float32, error)
+
+	// Name 返回模型名称
+	Name() string
 }
 
 // Config 嵌入客户端配置
 type Config struct {
-	Provider   string        // 提供商名称 (如 "openai", "local" 等)
-	Model      string        // 模型名称 (如 "text-embedding-3-small")
-	APIKey     string        // API密钥
-	Endpoint   string        // API端点URL
-	BatchSize  int           // 批处理最大大小
-	Timeout    time.Duration // 请求超时时间
-	Dimensions int           // 向量维度
-	Retries    int           // 失败重试次数
+	APIKey      string        // API密钥
+	BaseURL     string        // API基础URL
+	Model       string        // 模型名称
+	Timeout     time.Duration // 请求超时时间
+	MaxRetries  int           // 最大重试次数
+	Dimensions  int           // 向量维度
+	BatchSize   int           // 批处理大小
+	EnableCache bool          // 是否启用缓存
 }
 
-// DefaultConfig 返回默认的嵌入配置
-func DefaultConfig() Config {
-	return Config{
-		Provider:   "openai",
-		Model:      "text-embedding-3-small",
-		Endpoint:   "https://api.openai.com/v1",
-		BatchSize:  16,
-		Timeout:    time.Second * 30,
-		Dimensions: 1536, // 适用于OpenAI text-embedding-3-small
-		Retries:    3,
+// Option 客户端配置选项函数类型
+type Option func(*Config)
+
+// WithAPIKey 设置API密钥
+func WithAPIKey(apiKey string) Option {
+	return func(c *Config) {
+		c.APIKey = apiKey
 	}
 }
 
-// Factory 创建嵌入客户端的工厂函数类型
-type Factory func(config Config) (Client, error)
+// WithBaseURL 设置API基础URL
+func WithBaseURL(url string) Option {
+	return func(c *Config) {
+		c.BaseURL = url
+	}
+}
 
-// ClientRegistry 注册可用的嵌入客户端
-var ClientRegistry = map[string]Factory{}
+// WithModel 设置模型名称
+func WithModel(model string) Option {
+	return func(c *Config) {
+		c.Model = model
+	}
+}
+
+// WithTimeout 设置请求超时时间
+func WithTimeout(timeout time.Duration) Option {
+	return func(c *Config) {
+		c.Timeout = timeout
+	}
+}
+
+// WithMaxRetries 设置最大重试次数
+func WithMaxRetries(retries int) Option {
+	return func(c *Config) {
+		c.MaxRetries = retries
+	}
+}
+
+// WithDimensions 设置向量维度
+func WithDimensions(dimensions int) Option {
+	return func(c *Config) {
+		c.Dimensions = dimensions
+	}
+}
+
+// WithBatchSize 设置批处理大小
+func WithBatchSize(size int) Option {
+	return func(c *Config) {
+		c.BatchSize = size
+	}
+}
+
+// WithCache 启用或禁用缓存
+func WithCache(enable bool) Option {
+	return func(c *Config) {
+		c.EnableCache = enable
+	}
+}
+
+// DefaultConfig 返回默认配置
+func DefaultConfig() *Config {
+	return &Config{
+		BaseURL:     "https://dashscope.aliyuncs.com/api/v1/services/embeddings/text-embedding/text-embedding",
+		Model:       "text-embedding-v1", // 通义千问默认嵌入模型
+		Timeout:     30 * time.Second,
+		MaxRetries:  3,
+		Dimensions:  1536, // 通义千问模型默认维度，可能需要根据实际模型调整
+		BatchSize:   16,
+		EnableCache: false,
+	}
+}
+
+// NewConfig 创建一个新的配置并应用选项
+func NewConfig(opts ...Option) *Config {
+	cfg := DefaultConfig()
+	for _, opt := range opts {
+		opt(cfg)
+	}
+	return cfg
+}
+
+// Factory 嵌入客户端工厂函数类型
+type Factory func(opts ...Option) (Client, error)
+
+// 全局注册的嵌入客户端工厂函数
+var clientFactories = make(map[string]Factory)
 
 // RegisterClient 注册嵌入客户端工厂函数
 func RegisterClient(name string, factory Factory) {
-	ClientRegistry[name] = factory
+	clientFactories[name] = factory
 }
 
-// NewClient 根据配置创建新的嵌入客户端
-func NewClient(config Config) (Client, error) {
-	factory, ok := ClientRegistry[config.Provider]
-	if !ok {
-		// 默认使用OpenAI
-		factory = NewOpenAIClient
+// NewClient 根据名称创建嵌入客户端
+func NewClient(name string, opts ...Option) (Client, error) {
+	factory, exists := clientFactories[name]
+	if !exists {
+		return nil, NewEmbeddingError(
+			ErrCodeInvalidRequest,
+			"embedding client type not registered: "+name)
 	}
-	return factory(config)
-}
-
-// EmbeddingResult 包含文本ID和其嵌入向量
-type EmbeddingResult struct {
-	ID     string    // 文本标识符
-	Text   string    // 原始文本
-	Vector []float32 // 嵌入向量
-}
-
-// EmbeddingRequest 嵌入请求参数
-type EmbeddingRequest struct {
-	Texts      []string      // 要嵌入的文本
-	MaxRetries int           // 最大重试次数
-	Timeout    time.Duration // 超时时间
-}
-
-// BatchProcessor 将大批量文本分成较小批次处理的工具接口
-type BatchProcessor interface {
-	// Process 处理批量文本并返回对应的向量
-	Process(ctx context.Context, texts []string) ([][]float32, error)
+	return factory(opts...)
 }

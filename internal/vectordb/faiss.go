@@ -103,11 +103,11 @@ func createFaissIndex(dimension int, distType DistanceType) (faiss.Index, error)
 	var metric int
 	switch distType {
 	case Cosine, DotProduct:
-		metric = faiss.MetricInnerProduct
+		metric = int(faiss.MetricInnerProduct)
 	case Euclidean:
-		metric = faiss.MetricL2
+		metric = int(faiss.MetricL2)
 	default:
-		metric = faiss.MetricL2
+		metric = int(faiss.MetricL2)
 	}
 	return faiss.NewIndexFlat(dimension, metric)
 }
@@ -324,6 +324,12 @@ func (r *FaissRepository) Search(vector []float32, filter SearchFilter) ([]Searc
 			continue
 		}
 		dist := distances[i]
+		// 对于余弦相似度或点积，FAISS使用MetricInnerProduct
+		// 它返回的是内积（越大越相似），需要转换为距离（越小越相似）
+		if r.distanceType == Cosine || r.distanceType == DotProduct {
+			// 内积范围在[-1,1]，转换为距离[0,2]，其中0最相似
+			dist = 1 - dist // 将内积转为余弦距离
+		}
 		score := DistanceToScore(dist, r.distanceType)
 		if score < filter.MinScore {
 			continue
