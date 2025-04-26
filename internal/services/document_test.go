@@ -24,7 +24,7 @@ func TestDocumentService(t *testing.T) {
 	defer os.RemoveAll(tempDir)
 
 	// 创建测试文件
-	testContent := "这是一个测试文档内容。\n这是第二段落。\n这是第三段落。"
+	testContent := "这是一个测试文档内容。\n\n这是第二段落。\n\n这是第三段落。"
 	testFile := filepath.Join(tempDir, "test.txt")
 	err = ioutil.WriteFile(testFile, []byte(testContent), 0644)
 	require.NoError(t, err)

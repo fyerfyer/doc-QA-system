@@ -59,19 +59,19 @@ func (s *TextSplitter) Split(text string) ([]Content, error) {
 	switch s.config.SplitType {
 	case ByParagraph:
 		chunks = s.splitByParagraph(text)
+		// 对于段落模式，跳过小块合并
+		chunks = s.handleLargeChunks(chunks)
 	case BySentence:
 		chunks = s.splitBySentence(text)
+		chunks = s.mergeSmallChunks(chunks)
+		chunks = s.handleLargeChunks(chunks)
 	case ByLength:
 		chunks = s.splitByLength(text)
+		chunks = s.mergeSmallChunks(chunks)
+		chunks = s.handleLargeChunks(chunks)
 	default:
 		return nil, fmt.Errorf("unknown split type: %s", s.config.SplitType)
 	}
-
-	// 合并过小的段落
-	chunks = s.mergeSmallChunks(chunks)
-
-	// 处理过长的段落
-	chunks = s.handleLargeChunks(chunks)
 
 	// 应用最大分块数量限制
 	if s.config.MaxChunks > 0 && len(chunks) > s.config.MaxChunks {

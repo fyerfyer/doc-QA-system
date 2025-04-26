@@ -120,18 +120,42 @@ func (s *QAService) Answer(ctx context.Context, question string) (string, []vect
 		return "", nil, fmt.Errorf("search failed: %w", err)
 	}
 
-	// 如果没有找到相关文档
-	if len(results) == 0 {
+	// 检查是否有高相关度的文档
+	hasRelevantDocs := false
+	for _, result := range results {
+		if result.Score >= s.minScore {
+			hasRelevantDocs = true
+			break
+		}
+	}
+
+	// 如果没有找到高相关度文档，返回没有找到的消息
+	if len(results) == 0 || !hasRelevantDocs {
 		noContextAnswer := "抱歉，我没有找到相关信息可以回答您的问题。"
 		// 缓存此结果
 		s.cache.Set(cacheKey, noContextAnswer, s.cacheTTL)
 		return noContextAnswer, nil, nil
 	}
 
-	// 4. 提取相关文本内容
-	contexts := make([]string, len(results))
-	sources := make([]vectordb.Document, len(results))
-	for i, result := range results {
+	// 4. 提取相关文本内容，只保留相关度高于阈值的文档
+	var filteredResults []vectordb.SearchResult
+	for _, result := range results {
+		if result.Score >= s.minScore {
+			filteredResults = append(filteredResults, result)
+		}
+	}
+
+	// 如果过滤后没有文档，返回没有找到的消息
+	if len(filteredResults) == 0 {
+		noContextAnswer := "抱歉，我没有找到相关信息可以回答您的问题。"
+		// 缓存此结果
+		s.cache.Set(cacheKey, noContextAnswer, s.cacheTTL)
+		return noContextAnswer, nil, nil
+	}
+
+	contexts := make([]string, len(filteredResults))
+	sources := make([]vectordb.Document, len(filteredResults))
+	for i, result := range filteredResults {
 		contexts[i] = result.Document.Text
 		sources[i] = result.Document
 	}
@@ -200,17 +224,41 @@ func (s *QAService) AnswerWithFile(ctx context.Context, question string, fileID 
 		return "", nil, fmt.Errorf("search failed: %w", err)
 	}
 
-	// 如果没有找到相关文档
-	if len(results) == 0 {
+	// 检查是否有高相关度的文档
+	hasRelevantDocs := false
+	for _, result := range results {
+		if result.Score >= s.minScore {
+			hasRelevantDocs = true
+			break
+		}
+	}
+
+	// 如果没有找到高相关度文档，返回没有找到的消息
+	if len(results) == 0 || !hasRelevantDocs {
+		noContextAnswer := "抱歉，我没有找到相关信息可以回答您的问题。"
+		// 缓存此结果
+		s.cache.Set(cacheKey, noContextAnswer, s.cacheTTL)
+		return noContextAnswer, nil, nil
+	}
+
+	// 提取相关文本内容，只保留相关度高于阈值的文档
+	var filteredResults []vectordb.SearchResult
+	for _, result := range results {
+		if result.Score >= s.minScore {
+			filteredResults = append(filteredResults, result)
+		}
+	}
+
+	// 如果过滤后没有文档，返回没有找到的消息
+	if len(filteredResults) == 0 {
 		noContextAnswer := "抱歉，在指定文件中没有找到能回答您问题的相关信息。"
 		s.cache.Set(cacheKey, noContextAnswer, s.cacheTTL)
 		return noContextAnswer, nil, nil
 	}
 
-	// 提取相关文本内容
-	contexts := make([]string, len(results))
-	sources := make([]vectordb.Document, len(results))
-	for i, result := range results {
+	contexts := make([]string, len(filteredResults))
+	sources := make([]vectordb.Document, len(filteredResults))
+	for i, result := range filteredResults {
 		contexts[i] = result.Document.Text
 		sources[i] = result.Document
 	}
@@ -280,17 +328,41 @@ func (s *QAService) AnswerWithMetadata(ctx context.Context, question string, met
 		return "", nil, fmt.Errorf("search failed: %w", err)
 	}
 
-	// 如果没有找到相关文档
-	if len(results) == 0 {
+	// 检查是否有高相关度的文档
+	hasRelevantDocs := false
+	for _, result := range results {
+		if result.Score >= s.minScore {
+			hasRelevantDocs = true
+			break
+		}
+	}
+
+	// 如果没有找到高相关度文档，返回没有找到的消息
+	if len(results) == 0 || !hasRelevantDocs {
+		noContextAnswer := "抱歉，我没有找到相关信息可以回答您的问题。"
+		// 缓存此结果
+		s.cache.Set(cacheKey, noContextAnswer, s.cacheTTL)
+		return noContextAnswer, nil, nil
+	}
+
+	// 提取相关文本内容，只保留相关度高于阈值的文档
+	var filteredResults []vectordb.SearchResult
+	for _, result := range results {
+		if result.Score >= s.minScore {
+			filteredResults = append(filteredResults, result)
+		}
+	}
+
+	// 如果过滤后没有文档，返回没有找到的消息
+	if len(filteredResults) == 0 {
 		noContextAnswer := "抱歉，根据您的筛选条件，我没有找到相关信息。"
 		s.cache.Set(cacheKey, noContextAnswer, s.cacheTTL)
 		return noContextAnswer, nil, nil
 	}
 
-	// 提取相关文本内容
-	contexts := make([]string, len(results))
-	sources := make([]vectordb.Document, len(results))
-	for i, result := range results {
+	contexts := make([]string, len(filteredResults))
+	sources := make([]vectordb.Document, len(filteredResults))
+	for i, result := range filteredResults {
 		contexts[i] = result.Document.Text
 		sources[i] = result.Document
 	}

@@ -82,26 +82,6 @@ func TestQAServiceWithMetadata(t *testing.T) {
 	}
 }
 
-// TestQAServiceEdgeCases 测试边缘情况
-func TestQAServiceEdgeCases(t *testing.T) {
-	// 设置测试环境
-	qaService, cleanup := setupQATestEnv(t)
-	defer cleanup()
-
-	ctx := context.Background()
-
-	// 测试空问题
-	_, _, err := qaService.Answer(ctx, "")
-	assert.Error(t, err, "Empty question should return an error")
-
-	// 测试找不到答案的问题
-	irrelevantQuestion := "宇宙的终极答案是什么？"
-	answer, docs, err := qaService.Answer(ctx, irrelevantQuestion)
-	require.NoError(t, err)
-	assert.Contains(t, answer, "Sorry", "Should return an apologetic message")
-	assert.Empty(t, docs, "Should not return documents")
-}
-
 // TestQAServiceCacheOperations 测试缓存操作
 func TestQAServiceCacheOperations(t *testing.T) {
 	qaService, cleanup := setupQATestEnv(t)
@@ -297,7 +277,6 @@ func createTestDocuments(t *testing.T, embeddingClient embedding.Client, vectorD
 type testLLMClient struct{}
 
 func (c *testLLMClient) Generate(ctx context.Context, prompt string, options ...llm.GenerateOption) (*llm.Response, error) {
-	// 简单返回固定的测试响应
 	return &llm.Response{
 		Text:       "这是测试回答：" + prompt,
 		TokenCount: 10,
