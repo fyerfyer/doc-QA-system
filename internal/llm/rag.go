@@ -79,7 +79,7 @@ func DefaultRAGConfig() *RAGConfig {
 
 // RAGService 实现检索增强生成服务
 type RAGService struct {
-	client Client       // 大模型客户端
+	Client Client       // 大模型客户端
 	config *RAGConfig   // 配置
 	mu     sync.RWMutex // 配置互斥锁
 }
@@ -92,7 +92,7 @@ func NewRAG(client Client, opts ...RAGOption) *RAGService {
 	}
 
 	return &RAGService{
-		client: client,
+		Client: client,
 		config: cfg,
 	}
 }
@@ -160,7 +160,7 @@ func (r *RAGService) Answer(ctx context.Context, question string, contexts []str
 	prompt := r.buildPrompt(question, contexts)
 
 	// 调用大模型生成回答
-	response, err := r.client.Generate(
+	response, err := r.Client.Generate(
 		ctxWithTimeout,
 		prompt,
 		WithGenerateMaxTokens(cfg.MaxTokens),
