@@ -2,6 +2,7 @@ package document
 
 import (
 	"fmt"
+	"io"
 	"io/ioutil"
 	"os"
 )
@@ -23,10 +24,16 @@ func (p *PlainTextParser) Parse(filePath string) (string, error) {
 	}
 	defer file.Close()
 
+	// 使用ParseReader实现
+	return p.ParseReader(file, filePath)
+}
+
+// ParseReader 从Reader解析纯文本
+func (p *PlainTextParser) ParseReader(r io.Reader, filename string) (string, error) {
 	// 读取文件内容
-	content, err := ioutil.ReadAll(file)
+	content, err := ioutil.ReadAll(r)
 	if err != nil {
-		return "", fmt.Errorf("failed to read text file: %v", err)
+		return "", fmt.Errorf("failed to read text content: %v", err)
 	}
 
 	return string(content), nil

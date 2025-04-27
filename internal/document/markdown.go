@@ -2,6 +2,7 @@ package document
 
 import (
 	"fmt"
+	"io"
 	"io/ioutil"
 	"os"
 	"strings"
@@ -28,10 +29,16 @@ func (p *MarkdownParser) Parse(filePath string) (string, error) {
 	}
 	defer file.Close()
 
+	// 使用ParseReader实现
+	return p.ParseReader(file, filePath)
+}
+
+// ParseReader 从Reader解析Markdown内容
+func (p *MarkdownParser) ParseReader(r io.Reader, filename string) (string, error) {
 	// 读取文件内容
-	content, err := ioutil.ReadAll(file)
+	content, err := ioutil.ReadAll(r)
 	if err != nil {
-		return "", fmt.Errorf("failed to read markdown file: %v", err)
+		return "", fmt.Errorf("failed to read markdown content: %v", err)
 	}
 
 	// 创建Markdown解析器

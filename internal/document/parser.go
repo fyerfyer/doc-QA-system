@@ -2,6 +2,7 @@ package document
 
 import (
 	"errors"
+	"io"
 	"path/filepath"
 	"strings"
 )
@@ -11,6 +12,10 @@ import (
 type Parser interface {
 	// Parse 解析文档，返回文本内容
 	Parse(filePath string) (string, error)
+
+	// ParseReader 从Reader解析文档，返回文本内容
+	// filename用于确定文档类型
+	ParseReader(r io.Reader, filename string) (string, error)
 }
 
 // ContentType 表示文档的内容类型

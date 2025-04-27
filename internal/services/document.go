@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/fyerfyer/doc-QA-system/internal/document"
@@ -82,6 +83,8 @@ func WithTimeout(timeout time.Duration) DocumentOption {
 
 // ProcessDocument 处理文档(解析、分段、向量化、入库)
 func (s *DocumentService) ProcessDocument(ctx context.Context, fileID string, filePath string) error {
+	fmt.Printf("DEBUG: ProcessDocument started with fileID=%s, filePath=%s\n", fileID, filePath)
+
 	// 检查输入参数
 	if fileID == "" {
 		return errors.New("fileID cannot be empty")
@@ -95,31 +98,67 @@ func (s *DocumentService) ProcessDocument(ctx context.Context, fileID string, fi
 	defer cancel()
 
 	// 解析文档内容
+	fmt.Printf("DEBUG: Parsing document content\n")
 	content, err := s.parseDocument(filePath)
 	if err != nil {
+		fmt.Printf("DEBUG: Document parsing failed: %v\n", err)
 		return fmt.Errorf("failed to parse document: %w", err)
 	}
+	fmt.Printf("DEBUG: Document parsed successfully, content length: %d\n", len(content))
 
 	// 文本分段
+	fmt.Printf("DEBUG: Splitting content\n")
 	segments, err := s.splitContent(content)
 	if err != nil {
+		fmt.Printf("DEBUG: Content splitting failed: %v\n", err)
 		return fmt.Errorf("failed to split content: %w", err)
 	}
+	fmt.Printf("DEBUG: Content split into %d segments\n", len(segments))
 
 	// 批量处理文本段落
-	return s.processBatches(ctx, fileID, filePath, segments)
+	fmt.Printf("DEBUG: Processing batches\n")
+	err = s.processBatches(ctx, fileID, filePath, segments)
+	if err != nil {
+		fmt.Printf("DEBUG: Batch processing failed: %v\n", err)
+		return fmt.Errorf("failed to process batches: %w", err)
+	}
+	fmt.Printf("DEBUG: Batch processing completed successfully\n")
+
+	return nil
 }
 
 // parseDocument 解析文档内容
 func (s *DocumentService) parseDocument(filePath string) (string, error) {
-	// 根据文件类型选择对应的解析器
+	fmt.Printf("DEBUG: Attempting to parse document from path: %s\n", filePath)
+
+	// 首先尝试从存储获取文件
+	fileID := filepath.Base(filePath)
+	// 移除扩展名
+	fileID = strings.TrimSuffix(fileID, filepath.Ext(fileID))
+
+	// 尝试获取文件
+	reader, err := s.storage.Get(fileID)
+	if err != nil {
+		fmt.Printf("DEBUG: Failed to get file '%s' directly, trying with path: %v\n", fileID, err)
+		// 尝试将整个路径作为ID
+		reader, err = s.storage.Get(filePath)
+		if err != nil {
+			fmt.Printf("DEBUG: Failed to get file with path '%s': %v\n", filePath, err)
+			return "", fmt.Errorf("failed to get file from storage: %w", err)
+		}
+	}
+	defer reader.Close()
+
+	fmt.Printf("DEBUG: Successfully retrieved file from storage\n")
+
+	// 创建解析器
 	parser, err := document.ParserFactory(filePath)
 	if err != nil {
 		return "", fmt.Errorf("failed to create parser: %w", err)
 	}
 
-	// 解析文档
-	content, err := parser.Parse(filePath)
+	// 直接从reader解析文档
+	content, err := parser.ParseReader(reader, filePath)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse document: %w", err)
 	}

@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"io"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -153,6 +154,15 @@ func (p *testParser) Parse(filePath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return string(content), nil
+}
+
+func (p *testParser) ParseReader(r io.Reader, filename string) (string, error) {
+	content, err := ioutil.ReadAll(r)
+	if err != nil {
+		return "", err
+	}
+
 	return string(content), nil
 }
 

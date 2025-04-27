@@ -1,0 +1,57 @@
+version: '3.8'
+
+services:
+  # MinIO 对象存储服务
+  minio:
+    image: minio/minio
+    container_name: docqa-minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"  # 用于MinIO控制台
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # 创建MinIO桶的服务
+  createbuckets:
+    image: minio/mc
+    container_name: docqa-create-buckets
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      sleep 5;
+      /usr/bin/mc config host add myminio http://minio:9000 minioadmin minioadmin;
+      /usr/bin/mc mb myminio/docqa-test --ignore-existing;
+      /usr/bin/mc policy set public myminio/docqa-test;
+      exit 0;
+      "
+
+  # Redis 缓存服务
+  redis:
+    image: redis:alpine
+    container_name: docqa-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  minio_data:
+    name: docqa-minio-data
+  redis_data:
+    name: docqa-redis-data

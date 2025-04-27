@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"path/filepath"
 	"time"
@@ -109,8 +110,9 @@ func (h *DocumentHandler) UploadDocument(c *gin.Context) {
 	go func() {
 		// 记录开始处理
 		h.logger.WithField("file_id", fileInfo.ID).Info("Starting document processing")
+		ctx := context.Background()
 
-		if err := h.documentService.ProcessDocument(c.Request.Context(), fileInfo.ID, fileInfo.Path); err != nil {
+		if err := h.documentService.ProcessDocument(ctx, fileInfo.ID, fileInfo.Path); err != nil {
 			h.logger.WithFields(logrus.Fields{
 				"error":   err.Error(),
 				"file_id": fileInfo.ID,
