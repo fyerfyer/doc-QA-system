@@ -13,14 +13,26 @@ import (
 // {{.Question}} - 用户问题
 // {{.Context}} - 检索的上下文
 const DefaultRAGTemplate = `请你作为一个智能问答助手，基于下面提供的参考上下文回答问题。
-如果参考上下文中没有足够信息回答问题，请直接说"抱歉，我没有找到相关信息"，不要猜测或编造信息。
+即使参考上下文中的信息不完整，也请尽量根据提供的线索回答问题。如果参考上下文中完全没有相关信息，请直接说"抱歉，我没有找到相关信息"，不要猜测或编造信息。
+
+请特别注意：
+1. 即使参考上下文中只有部分相关信息，仍然需要尝试回答问题
+2. 如果参考上下文中有多个片段包含相关信息，请整合这些信息提供完整回答
+3. 回答应当简洁、准确、全面
 
 参考上下文:
 {{.Context}}
 
 用户问题: {{.Question}}
 
-请直接回答问题，不要重复问题内容，不要说参考上下文之类的话语。`
+请直接回答问题，不要重复问题内容，不要说"根据参考上下文"之类的话语。`
+
+// EmptyContextTemplate 无上下文时的提示词模板
+const EmptyContextTemplate = `请回答以下问题。如果你不确定答案，请诚实地说你不知道，而不是猜测。
+
+用户问题: {{.Question}}
+
+回答:`
 
 // DeepThinkingRAGTemplate 带有深度思考的RAG提示词模板
 const DeepThinkingRAGTemplate = `请你作为一个智能问答助手，基于下面提供的参考上下文回答问题。
@@ -56,6 +68,8 @@ func formatContext(contexts []string) string {
 type RAGConfig struct {
 	// 提示词模板
 	Template string
+	// 空上下文提示词模板
+	EmptyTemplate string
 	// 最大Token数
 	MaxTokens int
 	// 温度参数
@@ -70,6 +84,7 @@ type RAGConfig struct {
 func DefaultRAGConfig() *RAGConfig {
 	return &RAGConfig{
 		Template:       DefaultRAGTemplate,
+		EmptyTemplate:  EmptyContextTemplate,
 		MaxTokens:      2048,
 		Temperature:    0.7,
 		Timeout:        30 * time.Second,
@@ -104,6 +119,13 @@ type RAGOption func(*RAGConfig)
 func WithTemplate(template string) RAGOption {
 	return func(c *RAGConfig) {
 		c.Template = template
+	}
+}
+
+// WithEmptyContextTemplate 设置空上下文提示词模板
+func WithEmptyContextTemplate(template string) RAGOption {
+	return func(c *RAGConfig) {
+		c.EmptyTemplate = template
 	}
 }
 
@@ -156,8 +178,13 @@ func (r *RAGService) Answer(ctx context.Context, question string, contexts []str
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
 
-	// 构建提示词
-	prompt := r.buildPrompt(question, contexts)
+	// 构建提示词，区分有上下文和无上下文情况
+	var prompt string
+	if len(contexts) == 0 {
+		prompt = r.buildEmptyPrompt(question)
+	} else {
+		prompt = r.buildPrompt(question, contexts)
+	}
 
 	// 调用大模型生成回答
 	response, err := r.Client.Generate(
@@ -209,10 +236,31 @@ func (r *RAGService) buildPrompt(question string, contexts []string) string {
 	return prompt
 }
 
+// buildEmptyPrompt 构建无上下文提示词
+func (r *RAGService) buildEmptyPrompt(question string) string {
+	r.mu.RLock()
+	template := r.config.EmptyTemplate
+	r.mu.RUnlock()
+
+	// 简单的模板替换
+	prompt := template
+	prompt = strings.ReplaceAll(prompt, "{{.Question}}", question)
+
+	return prompt
+}
+
 // SetTemplate 设置自定义提示词模板
 func (r *RAGService) SetTemplate(template string) *RAGService {
 	r.mu.Lock()
 	r.config.Template = template
+	r.mu.Unlock()
+	return r
+}
+
+// SetEmptyTemplate 设置自定义空上下文提示词模板
+func (r *RAGService) SetEmptyTemplate(template string) *RAGService {
+	r.mu.Lock()
+	r.config.EmptyTemplate = template
 	r.mu.Unlock()
 	return r
 }

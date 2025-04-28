@@ -4,8 +4,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"github.com/fyerfyer/doc-QA-system/api"
-	"github.com/fyerfyer/doc-QA-system/api/middleware"
 	"log"
 	"net/http"
 	"os"
@@ -13,6 +11,9 @@ import (
 	"path/filepath"
 	"syscall"
 	"time"
+
+	"github.com/fyerfyer/doc-QA-system/api"
+	"github.com/fyerfyer/doc-QA-system/api/middleware"
 
 	"github.com/fyerfyer/doc-QA-system/api/handler"
 	"github.com/fyerfyer/doc-QA-system/internal/cache"
@@ -89,8 +90,8 @@ func main() {
 	// 创建文本分段器
 	splitter := document.NewTextSplitter(document.SplitterConfig{
 		SplitType:    document.ByParagraph,
-		ChunkSize:    cfg.MaxChunkSize,
-		ChunkOverlap: 200,
+		ChunkSize:    2000, // 从1000增加到2000
+		ChunkOverlap: 400,  // 从200增加到400
 	})
 
 	// 初始化RAG服务
@@ -115,6 +116,8 @@ func main() {
 		llmClient,
 		ragService,
 		cacheService,
+		services.WithMinScore(0.5),  // 将阈值从0.7降低到0.5
+		services.WithSearchLimit(8), // 从默认的5增加到8
 	)
 
 	// 初始化API处理器

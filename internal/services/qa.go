@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/fyerfyer/doc-QA-system/internal/cache"
@@ -78,10 +79,70 @@ func WithMinScore(score float32) QAOption {
 	}
 }
 
+// isGreeting 检查问题是否为简单问候语
+func isGreeting(question string) bool {
+	// 转为小写并去除空格以便更准确匹配
+	q := strings.ToLower(strings.TrimSpace(question))
+
+	// 常见问候语列表
+	greetings := []string{
+		"你好", "您好", "早上好", "下午好", "晚上好", "嗨", "hi", "hello",
+		"hey", "嘿", "哈喽", "喂", "在吗", "在么", "在不在",
+	}
+
+	// 检查是否完全匹配
+	for _, g := range greetings {
+		if q == g {
+			return true
+		}
+	}
+
+	// 检查是否部分匹配 (短问候语可能有附加内容)
+	if len(q) < 15 { // 限制长度防止误判
+		for _, g := range greetings {
+			if strings.HasPrefix(q, g+" ") || strings.Contains(q, g+"，") ||
+				strings.Contains(q, g+"!") || strings.Contains(q, g+"！") {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// handleGreeting 处理问候语
+func (s *QAService) handleGreeting(ctx context.Context, question string) (string, error) {
+	// 构建简单的问候语提示词
+	prompt := "用户向我问候：\"" + question + "\"。请你作为一个有礼貌的助手，用简短友善的语言回应这个问候。"
+
+	// 直接调用LLM生成回应
+	response, err := s.llm.Generate(
+		ctx,
+		prompt,
+		llm.WithGenerateMaxTokens(128), // 问候语回复不需要太长
+		llm.WithGenerateTemperature(0.7),
+	)
+
+	if err != nil {
+		return "", fmt.Errorf("failed to generate greeting response: %w", err)
+	}
+
+	return response.Text, nil
+}
+
 // Answer 回答问题
 func (s *QAService) Answer(ctx context.Context, question string) (string, []vectordb.Document, error) {
 	if question == "" {
 		return "", nil, fmt.Errorf("question cannot be empty")
+	}
+
+	// 检查是否是问候语
+	if isGreeting(question) {
+		greeting, err := s.handleGreeting(ctx, question)
+		if err != nil {
+			return "", nil, err
+		}
+		return greeting, nil, nil
 	}
 
 	// 1. 尝试从缓存获取
@@ -129,12 +190,67 @@ func (s *QAService) Answer(ctx context.Context, question string) (string, []vect
 		}
 	}
 
-	// 如果没有找到高相关度文档，返回没有找到的消息
+	// 如果没有找到高相关度文档，但有一些相关文档，仍使用它们
+	if !hasRelevantDocs && len(results) > 0 {
+		// 如果有低相关度文档，使用前几个最相关的
+		filteredResults := results
+		if len(results) > 3 {
+			filteredResults = results[:3] // 取前3个最相关文档
+		}
+
+		contexts := make([]string, len(filteredResults))
+		sources := make([]vectordb.Document, len(filteredResults))
+		for i, result := range filteredResults {
+			contexts[i] = result.Document.Text
+			sources[i] = result.Document
+		}
+
+		// 使用特殊的低置信度提示词
+		lowConfidencePrompt := "用户提问：" + question +
+			"\n\n我找到了一些可能相关但置信度不高的信息，请尝试根据这些信息回答用户问题，如果信息不足，可以说明这一点。"
+
+		for i, ctx := range contexts {
+			lowConfidencePrompt += fmt.Sprintf("\n\n参考信息[%d]: %s", i+1, ctx)
+		}
+
+		response, err := s.llm.Generate(
+			ctx,
+			lowConfidencePrompt,
+			llm.WithGenerateMaxTokens(1024),
+			llm.WithGenerateTemperature(0.7),
+		)
+
+		if err != nil {
+			return "", nil, fmt.Errorf("failed to generate low confidence answer: %w", err)
+		}
+
+		// 缓存结果
+		s.cache.Set(cacheKey, response.Text, s.cacheTTL)
+
+		return response.Text, sources, nil
+	}
+
+	// 如果没有找到高相关度文档，直接用LLM回答
 	if len(results) == 0 || !hasRelevantDocs {
-		noContextAnswer := "抱歉，我没有找到相关信息可以回答您的问题。"
+		// 构建一个通用知识问答提示词
+		generalPrompt := "请回答用户的问题：" + question +
+			"\n\n如果您不知道答案，请直接说\"抱歉，我没有足够信息回答这个问题。\"不要编造信息。"
+
+		genResponse, err := s.llm.Generate(
+			ctx,
+			generalPrompt,
+			llm.WithGenerateMaxTokens(1024),
+			llm.WithGenerateTemperature(0.7),
+		)
+
+		if err != nil {
+			return "", nil, fmt.Errorf("failed to generate general answer: %w", err)
+		}
+
 		// 缓存此结果
-		s.cache.Set(cacheKey, noContextAnswer, s.cacheTTL)
-		return noContextAnswer, nil, nil
+		s.cache.Set(cacheKey, genResponse.Text, s.cacheTTL)
+
+		return genResponse.Text, nil, nil
 	}
 
 	// 4. 提取相关文本内容，只保留相关度高于阈值的文档
@@ -189,6 +305,15 @@ func (s *QAService) AnswerWithFile(ctx context.Context, question string, fileID 
 		return "", nil, fmt.Errorf("fileID cannot be empty")
 	}
 
+	// 检查是否是问候语
+	if isGreeting(question) {
+		greeting, err := s.handleGreeting(ctx, question)
+		if err != nil {
+			return "", nil, err
+		}
+		return greeting, nil, nil
+	}
+
 	// 特定文件的缓存键
 	cacheKey := cache.GenerateCacheKey("qa_file", fileID, question)
 	cachedAnswer, found, err := s.cache.Get(cacheKey)
@@ -233,12 +358,27 @@ func (s *QAService) AnswerWithFile(ctx context.Context, question string, fileID 
 		}
 	}
 
-	// 如果没有找到高相关度文档，返回没有找到的消息
+	// 如果没有找到高相关度文档，使用LLM直接回答
 	if len(results) == 0 || !hasRelevantDocs {
-		noContextAnswer := "抱歉，我没有找到相关信息可以回答您的问题。"
+		// 构建一个特定文件问答提示词，但指出在该文件中没找到信息
+		filePrompt := "用户正在询问关于特定文件的问题：" + question +
+			"\n\n请告诉用户您在这个特定文件中没有找到相关信息，但可以尝试回答他们的一般性问题。"
+
+		fileResponse, err := s.llm.Generate(
+			ctx,
+			filePrompt,
+			llm.WithGenerateMaxTokens(512),
+			llm.WithGenerateTemperature(0.7),
+		)
+
+		if err != nil {
+			return "", nil, fmt.Errorf("failed to generate file-specific answer: %w", err)
+		}
+
 		// 缓存此结果
-		s.cache.Set(cacheKey, noContextAnswer, s.cacheTTL)
-		return noContextAnswer, nil, nil
+		s.cache.Set(cacheKey, fileResponse.Text, s.cacheTTL)
+
+		return fileResponse.Text, nil, nil
 	}
 
 	// 提取相关文本内容，只保留相关度高于阈值的文档
@@ -249,11 +389,25 @@ func (s *QAService) AnswerWithFile(ctx context.Context, question string, fileID 
 		}
 	}
 
-	// 如果过滤后没有文档，返回没有找到的消息
+	// 如果过滤后没有文档，使用LLM直接回答
 	if len(filteredResults) == 0 {
-		noContextAnswer := "抱歉，在指定文件中没有找到能回答您问题的相关信息。"
-		s.cache.Set(cacheKey, noContextAnswer, s.cacheTTL)
-		return noContextAnswer, nil, nil
+		prompt := "用户询问了关于特定文件的问题，但我们在文档中未找到足够相关的内容。问题是：" + question
+		response, err := s.llm.Generate(
+			ctx,
+			prompt,
+			llm.WithGenerateMaxTokens(512),
+		)
+
+		if err != nil {
+			// 如果LLM调用失败，返回默认消息
+			defaultMsg := "抱歉，在指定文件中没有找到能回答您问题的相关信息。"
+			s.cache.Set(cacheKey, defaultMsg, s.cacheTTL)
+			return defaultMsg, nil, nil
+		}
+
+		// 缓存LLM回答
+		s.cache.Set(cacheKey, response.Text, s.cacheTTL)
+		return response.Text, nil, nil
 	}
 
 	contexts := make([]string, len(filteredResults))
@@ -286,6 +440,15 @@ func (s *QAService) AnswerWithFile(ctx context.Context, question string, fileID 
 func (s *QAService) AnswerWithMetadata(ctx context.Context, question string, metadata map[string]interface{}) (string, []vectordb.Document, error) {
 	if question == "" {
 		return "", nil, fmt.Errorf("question cannot be empty")
+	}
+
+	// 检查是否是问候语
+	if isGreeting(question) {
+		greeting, err := s.handleGreeting(ctx, question)
+		if err != nil {
+			return "", nil, err
+		}
+		return greeting, nil, nil
 	}
 
 	// 创建元数据缓存键
@@ -337,12 +500,27 @@ func (s *QAService) AnswerWithMetadata(ctx context.Context, question string, met
 		}
 	}
 
-	// 如果没有找到高相关度文档，返回没有找到的消息
+	// 如果没有找到高相关度文档，使用LLM直接回答
 	if len(results) == 0 || !hasRelevantDocs {
-		noContextAnswer := "抱歉，我没有找到相关信息可以回答您的问题。"
+		// 构建提示词，指明在特定元数据过滤条件下没找到信息
+		metaPrompt := "用户使用特定过滤条件询问问题：" + question +
+			"\n\n请告诉用户您在这些特定条件下没有找到相关信息，但可以尝试回答他们的一般性问题。"
+
+		metaResponse, err := s.llm.Generate(
+			ctx,
+			metaPrompt,
+			llm.WithGenerateMaxTokens(512),
+			llm.WithGenerateTemperature(0.7),
+		)
+
+		if err != nil {
+			return "", nil, fmt.Errorf("failed to generate metadata-filtered answer: %w", err)
+		}
+
 		// 缓存此结果
-		s.cache.Set(cacheKey, noContextAnswer, s.cacheTTL)
-		return noContextAnswer, nil, nil
+		s.cache.Set(cacheKey, metaResponse.Text, s.cacheTTL)
+
+		return metaResponse.Text, nil, nil
 	}
 
 	// 提取相关文本内容，只保留相关度高于阈值的文档
@@ -353,11 +531,25 @@ func (s *QAService) AnswerWithMetadata(ctx context.Context, question string, met
 		}
 	}
 
-	// 如果过滤后没有文档，返回没有找到的消息
+	// 如果过滤后没有文档，使用LLM直接回答
 	if len(filteredResults) == 0 {
-		noContextAnswer := "抱歉，根据您的筛选条件，我没有找到相关信息。"
-		s.cache.Set(cacheKey, noContextAnswer, s.cacheTTL)
-		return noContextAnswer, nil, nil
+		prompt := "用户使用特定元数据筛选条件询问问题，但我们未找到足够相关的内容。问题是：" + question
+		response, err := s.llm.Generate(
+			ctx,
+			prompt,
+			llm.WithGenerateMaxTokens(512),
+		)
+
+		if err != nil {
+			// 如果LLM调用失败，返回默认消息
+			defaultMsg := "抱歉，根据您的筛选条件，我没有找到相关信息。"
+			s.cache.Set(cacheKey, defaultMsg, s.cacheTTL)
+			return defaultMsg, nil, nil
+		}
+
+		// 缓存LLM回答
+		s.cache.Set(cacheKey, response.Text, s.cacheTTL)
+		return response.Text, nil, nil
 	}
 
 	contexts := make([]string, len(filteredResults))
