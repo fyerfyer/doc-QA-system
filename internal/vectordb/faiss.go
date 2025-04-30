@@ -73,7 +73,7 @@ func NewFaissRepository(config Config) (Repository, error) {
 		distanceType:   distType,
 		saveOnClose:    true,
 		autoSave:       true,
-		autoSaveCount:   100, // 默认每100次操作自动保存一次
+		autoSaveCount:  100,                            // 默认每100次操作自动保存一次
 		queryCache:     NewTimedCache(5 * time.Minute), // 查询缓存5分钟
 		lastSave:       time.Now(),
 	}
@@ -363,12 +363,21 @@ func (r *FaissRepository) Search(vector []float32, filter SearchFilter) ([]Searc
 
 	// 基于向量和过滤器生成缓存键
 	cacheKey := generateCacheKey(vector, filter)
+	// fmt.Printf("generate cache key: %s\n", cacheKey)
 
 	// 尝试从缓存获取结果
 	if cachedValue, found := r.queryCache.Get(cacheKey); found {
+		// fmt.Println("cache hit!")
 		if results, ok := cachedValue.([]SearchResult); ok {
+			// 检查缓存的元数据
+			if len(results) > 0 {
+				fmt.Printf("cached document ID: %s, metadata: %+v\n", results[0].Document.ID, results[0].Document.Metadata)
+			}
 			return results, nil
 		}
+		// fmt.Println("failed to cast cached value to SearchResult slice")
+	} else {
+		// fmt.Println("cache miss!")
 	}
 
 	r.mu.RLock()
@@ -402,20 +411,19 @@ func (r *FaissRepository) Search(vector []float32, filter SearchFilter) ([]Searc
 	}
 
 	// 处理搜索结果
-	results, err := r.processSearchResults(vector, distances, indices, filter)
+	results, err := r.processSearchResults(distances, indices, filter)
 	if err != nil {
 		return nil, err
 	}
 
-	// 缓存结果
-	r.queryCache.Set(cacheKey, results)
+	// 缓存结果 - 关键修改：存入深拷贝而不是原引用
+	r.queryCache.Set(cacheKey, deepCopyResults(results))
 
 	return results, nil
 }
 
 // processSearchResults 处理Faiss返回的搜索结果
 func (r *FaissRepository) processSearchResults(
-	vector []float32,
 	distances []float32,
 	indices []int64,
 	filter SearchFilter,
@@ -515,6 +523,11 @@ func (r *FaissRepository) processSearchResults(
 		results = results[:filter.MaxResults]
 	}
 
+	// 打印结果
+	// if len(results) > 0 {
+	// 	fmt.Printf("Handling documents with ID: %s, metadata: %+v\n", results[0].Document.ID, results[0].Document.Metadata)
+	// }
+
 	return results, nil
 }
 
@@ -531,6 +544,40 @@ func generateCacheKey(vector []float32, filter SearchFilter) string {
 	}
 
 	return key
+}
+
+// 添加一个新的辅助函数来创建结果的深拷贝
+func deepCopyResults(results []SearchResult) []SearchResult {
+	copied := make([]SearchResult, len(results))
+	for i, result := range results {
+		copied[i] = SearchResult{
+			Score:    result.Score,
+			Distance: result.Distance,
+			Document: deepCopyDocument(result.Document),
+		}
+	}
+	return copied
+}
+
+// 深拷贝Document对象
+func deepCopyDocument(doc Document) Document {
+	copiedDoc := doc
+
+	// 拷贝向量
+	if doc.Vector != nil {
+		copiedDoc.Vector = make([]float32, len(doc.Vector))
+		copy(copiedDoc.Vector, doc.Vector)
+	}
+
+	// 拷贝元数据
+	if doc.Metadata != nil {
+		copiedDoc.Metadata = make(map[string]interface{})
+		for k, v := range doc.Metadata {
+			copiedDoc.Metadata[k] = v
+		}
+	}
+
+	return copiedDoc
 }
 
 // Count 获取文档总数
