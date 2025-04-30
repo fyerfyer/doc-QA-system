@@ -2,6 +2,7 @@ package cache
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -38,7 +39,7 @@ func NewRedisCache(config Config) (Cache, error) {
 // Get 获取缓存内容
 func (r *RedisCache) Get(key string) (string, bool, error) {
 	value, err := r.client.Get(r.ctx, key).Result()
-	if err == redis.Nil {
+	if errors.Is(err, redis.Nil) {
 		// 键不存在
 		return "", false, nil
 	} else if err != nil {

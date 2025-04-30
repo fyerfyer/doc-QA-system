@@ -308,7 +308,6 @@ func SetTraceID() gin.HandlerFunc {
 		traceID := c.GetHeader("X-Trace-ID")
 		if traceID == "" {
 			// 使用 WithTraceContext 创建跟踪ID
-			entry := WithTraceContext(c)
 			traceID, _ := c.Get("TraceID")
 			c.Set("TraceID", traceID)
 		}
