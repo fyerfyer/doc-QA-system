@@ -330,7 +330,7 @@ func Recovery() gin.HandlerFunc {
 					message = "服务器内部错误"
 				}
 
-				appErr := NewInternalError("服务器内部错误", fmt.Errorf("%v", err))
+				appErr := NewInternalError(message, fmt.Errorf("%v", err))
 				c.JSON(http.StatusInternalServerError, appErr.ResponseJSON(traceIDStr))
 				c.Abort()
 			}

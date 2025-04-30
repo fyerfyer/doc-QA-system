@@ -17,13 +17,12 @@ func SetupRouter(
 
 	// 应用全局中间件
 	router.Use(middleware.Logger())
-	router.Use(middleware.ErrorMiddleware())
+	router.Use(middleware.ErrorHandler())
 	router.Use(middleware.SetTraceID())
 
 	// 在调试模式下记录请求体和响应体
 	if gin.Mode() == gin.DebugMode {
-		router.Use(middleware.RequestBodyLog())
-		router.Use(middleware.ResponseLogger())
+		router.Use(middleware.RequestLogger())
 	}
 
 	// 创建API分组

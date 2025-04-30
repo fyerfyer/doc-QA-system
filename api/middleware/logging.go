@@ -18,10 +18,10 @@ import (
 )
 
 var (
-	log     *logrus.Logger  // 全局日志实例
-	logOnce sync.Once       // 确保日志只初始化一次
-	logDir  = "logs"        // 日志目录
-	appName = "doc-qa"      // 应用名称
+	log     *logrus.Logger // 全局日志实例
+	logOnce sync.Once      // 确保日志只初始化一次
+	logDir  = "logs"       // 日志目录
+	appName = "doc-qa"     // 应用名称
 )
 
 // LogConfig 日志配置
@@ -178,7 +178,7 @@ func Logger() gin.HandlerFunc {
 		// 开始时间
 		start := time.Now()
 
-		 // 为请求设置追踪ID
+		// 为请求设置追踪ID
 		traceID := c.GetHeader("X-Trace-ID")
 		if traceID == "" {
 			traceID = uuid.New().String()
@@ -195,10 +195,10 @@ func Logger() gin.HandlerFunc {
 
 		// 计算请求延迟
 		latency := time.Since(start)
-		
+
 		// 获取状态码
 		statusCode := c.Writer.Status()
-		
+
 		// 添加查询参数
 		if raw != "" {
 			path = path + "?" + raw
@@ -228,7 +228,7 @@ func RequestLogger() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// 创建请求日志条目
 		reqLogger := WithTraceContext(c)
-		
+
 		// 记录请求开始
 		reqLogger.WithFields(logrus.Fields{
 			"user_agent": c.Request.UserAgent(),
@@ -284,10 +284,10 @@ func GetCallerInfo(skip int) string {
 	if !ok {
 		return "unknown"
 	}
-	
+
 	// 获取相对路径，避免显示整个绝对路径
 	short := filepath.Base(file)
-	
+
 	return fmt.Sprintf("%s:%d", short, line)
 }
 
@@ -300,6 +300,22 @@ func LogError(err error, message string) {
 	}).Error(message)
 }
 
+// SetTraceID 设置请求跟踪ID
+func SetTraceID() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// 读取请求的跟踪ID，如果没有则创建一个新的
+		// 这个功能已经在 Logger 中间件中实现，这里只是为了保持API兼容
+		traceID := c.GetHeader("X-Trace-ID")
+		if traceID == "" {
+			// 使用 WithTraceContext 创建跟踪ID
+			entry := WithTraceContext(c)
+			traceID, _ := c.Get("TraceID")
+			c.Set("TraceID", traceID)
+		}
+		c.Next()
+	}
+}
+
 // 初始化日志
 func init() {
 	if log == nil {
@@ -308,7 +324,7 @@ func init() {
 		if level := os.Getenv("LOG_LEVEL"); level != "" {
 			config.Level = level
 		}
-		
+
 		// 初始化日志系统
 		InitLogger(config)
 	}
