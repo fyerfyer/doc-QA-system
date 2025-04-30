@@ -10,8 +10,11 @@ import (
 
 	"github.com/fyerfyer/doc-QA-system/internal/document"
 	"github.com/fyerfyer/doc-QA-system/internal/embedding"
+	"github.com/fyerfyer/doc-QA-system/internal/models"
+	"github.com/fyerfyer/doc-QA-system/internal/repository"
 	"github.com/fyerfyer/doc-QA-system/internal/vectordb"
 	"github.com/fyerfyer/doc-QA-system/pkg/storage"
+	"github.com/sirupsen/logrus"
 )
 
 // 文档处理状态
@@ -25,13 +28,16 @@ const (
 // DocumentService 文档服务
 // 负责协调文档解析、分段、嵌入和存储
 type DocumentService struct {
-	storage   storage.Storage     // 文件存储服务
-	parser    document.Parser     // 文档解析器
-	splitter  document.Splitter   // 文本分段器
-	embedder  embedding.Client    // 嵌入模型客户端
-	vectorDB  vectordb.Repository // 向量数据库
-	batchSize int                 // 批处理大小
-	timeout   time.Duration       // 处理超时时间
+	storage           storage.Storage                // 文件存储服务
+	parser            document.Parser                // 文档解析器
+	splitter          document.Splitter              // 文本分段器
+	embedder          embedding.Client               // 嵌入模型客户端
+	vectorDB          vectordb.Repository            // 向量数据库
+	repo              repository.DocumentRepository  // 文档元数据存储
+	statusManager     *DocumentStatusManager         // 文档状态管理器
+	batchSize         int                            // 批处理大小
+	timeout           time.Duration                  // 处理超时时间
+	logger            *logrus.Logger                 // 日志记录器
 }
 
 // DocumentOption 文档服务配置选项
@@ -55,6 +61,7 @@ func NewDocumentService(
 		vectorDB:  vectorDB,
 		batchSize: 16,              // 默认批处理大小
 		timeout:   time.Minute * 5, // 默认超时时间
+		logger:    logrus.New(),    // 默认日志记录器
 	}
 
 	// 应用配置选项
@@ -81,9 +88,56 @@ func WithTimeout(timeout time.Duration) DocumentOption {
 	}
 }
 
+// WithLogger 设置日志记录器
+func WithLogger(logger *logrus.Logger) DocumentOption {
+	return func(s *DocumentService) {
+		if logger != nil {
+			s.logger = logger
+		}
+	}
+}
+
+// WithDocumentRepository 设置文档仓储
+func WithDocumentRepository(repo repository.DocumentRepository) DocumentOption {
+	return func(s *DocumentService) {
+		s.repo = repo
+	}
+}
+
+// WithStatusManager 设置状态管理器
+func WithStatusManager(manager *DocumentStatusManager) DocumentOption {
+	return func(s *DocumentService) {
+		s.statusManager = manager
+	}
+}
+
+// Init 初始化文档服务
+// 确保必要的依赖都已设置
+func (s *DocumentService) Init() error {
+	// 如果没有设置仓储，创建默认仓储
+	if s.repo == nil {
+		s.repo = repository.NewDocumentRepository()
+	}
+
+	// 如果没有设置状态管理器，创建默认状态管理器
+	if s.statusManager == nil {
+		s.statusManager = NewDocumentStatusManager(s.repo, s.logger)
+	}
+
+	return nil
+}
+
 // ProcessDocument 处理文档(解析、分段、向量化、入库)
 func (s *DocumentService) ProcessDocument(ctx context.Context, fileID string, filePath string) error {
-	fmt.Printf("DEBUG: ProcessDocument started with fileID=%s, filePath=%s\n", fileID, filePath)
+	// 确保初始化完成
+	if err := s.Init(); err != nil {
+		return err
+	}
+
+	s.logger.WithFields(logrus.Fields{
+		"file_id":   fileID,
+		"file_path": filePath,
+	}).Info("Starting document processing")
 
 	// 检查输入参数
 	if fileID == "" {
@@ -97,39 +151,55 @@ func (s *DocumentService) ProcessDocument(ctx context.Context, fileID string, fi
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 
+	// 更新文档状态为处理中
+	if err := s.statusManager.MarkAsProcessing(ctx, fileID); err != nil {
+		s.logger.WithError(err).Error("Failed to mark document as processing")
+		// 继续处理，不中断
+	}
+
 	// 解析文档内容
-	fmt.Printf("DEBUG: Parsing document content\n")
 	content, err := s.parseDocument(filePath)
 	if err != nil {
-		fmt.Printf("DEBUG: Document parsing failed: %v\n", err)
+		s.failDocument(ctx, fileID, fmt.Sprintf("failed to parse document: %v", err))
 		return fmt.Errorf("failed to parse document: %w", err)
 	}
-	fmt.Printf("DEBUG: Document parsed successfully, content length: %d\n", len(content))
 
 	// 文本分段
-	fmt.Printf("DEBUG: Splitting content\n")
 	segments, err := s.splitContent(content)
 	if err != nil {
-		fmt.Printf("DEBUG: Content splitting failed: %v\n", err)
+		s.failDocument(ctx, fileID, fmt.Sprintf("failed to split content: %v", err))
 		return fmt.Errorf("failed to split content: %w", err)
 	}
-	fmt.Printf("DEBUG: Content split into %d segments\n", len(segments))
+
+	// 更新进度到20%
+	if err := s.statusManager.UpdateProgress(ctx, fileID, 20); err != nil {
+		s.logger.WithError(err).Warn("Failed to update document progress")
+	}
 
 	// 批量处理文本段落
-	fmt.Printf("DEBUG: Processing batches\n")
 	err = s.processBatches(ctx, fileID, filePath, segments)
 	if err != nil {
-		fmt.Printf("DEBUG: Batch processing failed: %v\n", err)
+		s.failDocument(ctx, fileID, fmt.Sprintf("failed to process batches: %v", err))
 		return fmt.Errorf("failed to process batches: %w", err)
 	}
-	fmt.Printf("DEBUG: Batch processing completed successfully\n")
+
+	// 文档处理完成，更新状态
+	if err := s.statusManager.MarkAsCompleted(ctx, fileID, len(segments)); err != nil {
+		s.logger.WithError(err).Error("Failed to mark document as completed")
+		// 虽然状态更新失败，但文档处理成功，所以不返回错误
+	}
+
+	s.logger.WithFields(logrus.Fields{
+		"file_id":       fileID,
+		"segment_count": len(segments),
+	}).Info("Document processing completed successfully")
 
 	return nil
 }
 
 // parseDocument 解析文档内容
 func (s *DocumentService) parseDocument(filePath string) (string, error) {
-	fmt.Printf("DEBUG: Attempting to parse document from path: %s\n", filePath)
+	s.logger.WithField("file_path", filePath).Debug("Parsing document")
 
 	// 首先尝试从存储获取文件
 	fileID := filepath.Base(filePath)
@@ -139,17 +209,14 @@ func (s *DocumentService) parseDocument(filePath string) (string, error) {
 	// 尝试获取文件
 	reader, err := s.storage.Get(fileID)
 	if err != nil {
-		fmt.Printf("DEBUG: Failed to get file '%s' directly, trying with path: %v\n", fileID, err)
+		s.logger.WithError(err).Debug("Failed to get file directly, trying with path")
 		// 尝试将整个路径作为ID
 		reader, err = s.storage.Get(filePath)
 		if err != nil {
-			fmt.Printf("DEBUG: Failed to get file with path '%s': %v\n", filePath, err)
 			return "", fmt.Errorf("failed to get file from storage: %w", err)
 		}
 	}
 	defer reader.Close()
-
-	fmt.Printf("DEBUG: Successfully retrieved file from storage\n")
 
 	// 创建解析器
 	parser, err := document.ParserFactory(filePath)
@@ -186,6 +253,9 @@ func (s *DocumentService) processBatches(ctx context.Context, fileID string, fil
 		return nil
 	}
 
+	totalBatches := (len(segments) + s.batchSize - 1) / s.batchSize
+	processedBatches := 0
+
 	// 按批次处理
 	for i := 0; i < len(segments); i += s.batchSize {
 		// 检查上下文是否已取消
@@ -219,7 +289,10 @@ func (s *DocumentService) processBatches(ctx context.Context, fileID string, fil
 
 		// 构建文档对象并存入向量数据库
 		docs := make([]vectordb.Document, len(batch))
+		dbSegments := make([]*models.DocumentSegment, len(batch))
+
 		for j := range batch {
+			// 创建向量数据库文档
 			docs[j] = vectordb.Document{
 				ID:        fmt.Sprintf("%s_%d", fileID, batch[j].Index),
 				FileID:    fileID,
@@ -233,11 +306,32 @@ func (s *DocumentService) processBatches(ctx context.Context, fileID string, fil
 					"index":  batch[j].Index,
 				},
 			}
+
+			// 创建数据库段落记录
+			dbSegments[j] = &models.DocumentSegment{
+				DocumentID: fileID,
+				SegmentID:  fmt.Sprintf("%s_%d", fileID, batch[j].Index),
+				Position:   batch[j].Index,
+				Text:       batch[j].Text,
+			}
 		}
 
 		// 批量插入向量数据库
 		if err := s.vectorDB.AddBatch(docs); err != nil {
 			return fmt.Errorf("failed to store vectors: %w", err)
+		}
+
+		// 批量保存段落到数据库
+		if err := s.repo.SaveSegments(dbSegments); err != nil {
+			s.logger.WithError(err).Error("Failed to save segments to database")
+			// 不中断处理
+		}
+
+		processedBatches++
+		// 计算并更新进度（20%到90%的范围）
+		progress := 20 + int(float64(processedBatches)/float64(totalBatches)*70)
+		if err := s.statusManager.UpdateProgress(ctx, fileID, progress); err != nil {
+			s.logger.WithError(err).Warn("Failed to update document progress")
 		}
 	}
 
@@ -246,53 +340,135 @@ func (s *DocumentService) processBatches(ctx context.Context, fileID string, fil
 
 // DeleteDocument 删除文档及其相关数据
 func (s *DocumentService) DeleteDocument(ctx context.Context, fileID string) error {
-	// 从向量数据库中删除
+	// 确保初始化完成
+	if err := s.Init(); err != nil {
+		return err
+	}
+
+	s.logger.WithField("file_id", fileID).Info("Deleting document")
+
+	// 1. 从向量数据库中删除
 	if err := s.vectorDB.DeleteByFileID(fileID); err != nil {
+		s.logger.WithError(err).Error("Failed to delete document vectors")
 		return fmt.Errorf("failed to delete document vectors: %w", err)
 	}
 
-	// 从存储中删除文件
+	// 2. 从存储中删除文件
 	if err := s.storage.Delete(fileID); err != nil {
 		// 文件可能已被删除，记录错误但不中断流程
-		fmt.Printf("Warning: failed to delete file from storage: %v\n", err)
+		s.logger.WithError(err).Warn("Failed to delete file from storage")
 	}
 
+	// 3. 删除文档状态记录
+	if err := s.statusManager.DeleteDocument(ctx, fileID); err != nil {
+		s.logger.WithError(err).Error("Failed to delete document status record")
+		return fmt.Errorf("failed to delete document status record: %w", err)
+	}
+
+	s.logger.WithField("file_id", fileID).Info("Document deleted successfully")
 	return nil
 }
 
 // GetDocumentInfo 获取文档信息
 func (s *DocumentService) GetDocumentInfo(ctx context.Context, fileID string) (map[string]interface{}, error) {
-	// 这里可以实现获取文档元信息的逻辑
-	// 例如从数据库或缓存中获取文档的处理状态、创建时间等
+	// 确保初始化完成
+	if err := s.Init(); err != nil {
+		return nil, err
+	}
 
-	// TODO: 实现文档信息存储和检索
-	// 注意：这需要一个存储文档元信息的组件，可能是关系数据库或NoSQL
+	// 获取文档状态
+	doc, err := s.statusManager.GetDocument(ctx, fileID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get document: %w", err)
+	}
 
-	// 临时返回基本信息
-	return map[string]interface{}{
-		"file_id": fileID,
-		"status":  DocStatusCompleted,
-	}, nil
+	// 构建文档信息
+	info := map[string]interface{}{
+		"file_id":    doc.ID,
+		"filename":   doc.FileName,
+		"status":     doc.Status,
+		"created_at": doc.UploadedAt.Format(time.RFC3339),
+		"updated_at": doc.UpdatedAt.Format(time.RFC3339),
+		"size":       doc.FileSize,
+		"progress":   doc.Progress,
+	}
+
+	// 如果有错误信息，添加到返回结果
+	if doc.Error != "" {
+		info["error"] = doc.Error
+	}
+
+	// 如果有处理完成时间，添加到返回结果
+	if doc.ProcessedAt != nil {
+		info["processed_at"] = doc.ProcessedAt.Format(time.RFC3339)
+	}
+
+	// 如果有标签，添加到返回结果
+	if doc.Tags != "" {
+		info["tags"] = doc.Tags
+	}
+
+	return info, nil
 }
 
 // CountDocumentSegments 统计文档段落数量
 func (s *DocumentService) CountDocumentSegments(ctx context.Context, fileID string) (int, error) {
-	// TODO: 实现统计段落数量的逻辑
-	// 可以通过向量数据库的查询功能实现
-
-	// 临时实现：获取所有段落并计数
-	filter := vectordb.SearchFilter{
-		FileIDs:    []string{fileID},
-		MaxResults: 0, // 不限制结果数量
+	// 确保初始化完成
+	if err := s.Init(); err != nil {
+		return 0, err
 	}
 
-	// 使用一个空向量查询，主要是为了应用过滤器
-	// 注意：这不是最优实现，应该有更高效的计数方法
-	dummyVector := make([]float32, s.vectorDB.(interface{ Dimension() int }).Dimension())
-	results, err := s.vectorDB.Search(dummyVector, filter)
+	// 使用仓储统计段落数量
+	return s.repo.CountSegments(fileID)
+}
+
+// ListDocuments 获取文档列表
+func (s *DocumentService) ListDocuments(ctx context.Context, offset, limit int, filters map[string]interface{}) ([]*models.Document, int64, error) {
+	// 确保初始化完成
+	if err := s.Init(); err != nil {
+		return nil, 0, err
+	}
+
+	// 使用状态管理器获取文档列表
+	return s.statusManager.ListDocuments(ctx, offset, limit, filters)
+}
+
+// UpdateDocumentTags 更新文档标签
+func (s *DocumentService) UpdateDocumentTags(ctx context.Context, fileID string, tags string) error {
+	// 确保初始化完成
+	if err := s.Init(); err != nil {
+		return err
+	}
+
+	// 获取文档
+	doc, err := s.statusManager.GetDocument(ctx, fileID)
 	if err != nil {
-		return 0, fmt.Errorf("failed to count document segments: %w", err)
+		return fmt.Errorf("failed to get document: %w", err)
 	}
 
-	return len(results), nil
+	// 更新标签
+	doc.Tags = tags
+
+	// 保存更新
+	return s.repo.Update(doc)
+}
+
+// failDocument 将文档标记为失败状态
+func (s *DocumentService) failDocument(ctx context.Context, fileID string, errorMsg string) {
+	if s.statusManager == nil {
+		s.logger.Error("Cannot mark document as failed: status manager not initialized")
+		return
+	}
+
+	if err := s.statusManager.MarkAsFailed(ctx, fileID, errorMsg); err != nil {
+		s.logger.WithFields(logrus.Fields{
+			"file_id": fileID,
+			"error":   err,
+		}).Error("Failed to mark document as failed")
+	}
+}
+
+// GetStatusManager 返回文档状态管理器实例
+func (s *DocumentService) GetStatusManager() *DocumentStatusManager {
+	return s.statusManager
 }

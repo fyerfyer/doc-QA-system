@@ -8,6 +8,7 @@ import (
 
 	"github.com/fyerfyer/doc-QA-system/api/middleware"
 	"github.com/fyerfyer/doc-QA-system/api/model"
+	"github.com/fyerfyer/doc-QA-system/internal/models"
 	"github.com/fyerfyer/doc-QA-system/internal/services"
 	"github.com/fyerfyer/doc-QA-system/pkg/storage"
 	"github.com/gin-gonic/gin"
@@ -106,6 +107,14 @@ func (h *DocumentHandler) UploadDocument(c *gin.Context) {
 		"size":     fileInfo.Size,
 	}).Info("File uploaded successfully")
 
+	// 通过状态管理器记录文档上传状态
+	ctx := context.Background()
+	if err := h.documentService.Init(); err == nil {
+		if h.documentService.GetStatusManager() != nil {
+			_ = h.documentService.GetStatusManager().MarkAsUploaded(ctx, fileInfo.ID, fileInfo.Name, fileInfo.Path, fileInfo.Size)
+		}
+	}
+
 	// 启动异步处理任务
 	go func() {
 		// 记录开始处理
@@ -117,11 +126,10 @@ func (h *DocumentHandler) UploadDocument(c *gin.Context) {
 				"error":   err.Error(),
 				"file_id": fileInfo.ID,
 			}).Error("Failed to process document")
-
-			// TODO: 更新文档状态为失败
+			// 状态更新由ProcessDocument内部处理
 		} else {
 			h.logger.WithField("file_id", fileInfo.ID).Info("Document processed successfully")
-			// TODO: 更新文档状态为完成
+			// 状态更新由ProcessDocument内部处理
 		}
 	}()
 
@@ -129,7 +137,7 @@ func (h *DocumentHandler) UploadDocument(c *gin.Context) {
 	resp := model.DocumentUploadResponse{
 		FileID:   fileInfo.ID,
 		FileName: filename,
-		Status:   "processing", // 初始状态为处理中
+		Status:   "uploaded", // 初始状态为已上传
 	}
 
 	c.JSON(http.StatusOK, model.NewSuccessResponse(resp))
@@ -182,6 +190,23 @@ func (h *DocumentHandler) GetDocumentStatus(c *gin.Context) {
 		resp.Error = errMsg.(string)
 	}
 
+	// 如果有处理进度，添加到响应中
+	if progress, ok := docInfo["progress"]; ok {
+		resp.Progress = progress.(int)
+	}
+
+	// 如果有文件大小，添加到响应中
+	if size, ok := docInfo["size"]; ok {
+		if sizeInt, ok := size.(int64); ok {
+			resp.Size = sizeInt
+		}
+	}
+
+	// 如果有标签，添加到响应中
+	if tags, ok := docInfo["tags"]; ok && tags.(string) != "" {
+		resp.Tags = tags.(string)
+	}
+
 	c.JSON(http.StatusOK, model.NewSuccessResponse(resp))
 }
 
@@ -195,37 +220,72 @@ func (h *DocumentHandler) ListDocuments(c *gin.Context) {
 		return
 	}
 
+	// 计算分页参数
+	offset := (req.GetPage() - 1) * req.GetPageSize()
+	limit := req.GetPageSize()
+
 	// 构建过滤条件
-	filterOptions := make(map[string]interface{})
+	filters := make(map[string]interface{})
 
 	if req.Status != "" {
-		filterOptions["status"] = req.Status
+		filters["status"] = req.Status
 	}
 
 	if req.Tags != "" {
-		filterOptions["tags"] = req.Tags
+		filters["tags"] = req.Tags
 	}
 
 	if req.StartTime != nil {
-		filterOptions["start_time"] = req.StartTime.Format(time.RFC3339)
+		filters["start_time"] = req.StartTime.Format(time.RFC3339)
 	}
 
 	if req.EndTime != nil {
-		filterOptions["end_time"] = req.EndTime.Format(time.RFC3339)
+		filters["end_time"] = req.EndTime.Format(time.RFC3339)
 	}
 
-	// TODO: 实现文档列表查询
-	// 这里需要DocumentService提供一个ListDocuments方法
-	// 由于这是一个待实现的功能，我们先返回一个空列表
+	// 查询文档列表
+	docs, total, err := h.documentService.ListDocuments(c.Request.Context(), offset, limit, filters)
+	if err != nil {
+		h.logger.WithFields(logrus.Fields{
+			"error":  err.Error(),
+			"offset": offset,
+			"limit":  limit,
+		}).Error("Failed to fetch document list")
 
-	h.logger.Info("Document list requested, returning empty list (feature not implemented yet)")
+		c.JSON(http.StatusInternalServerError, model.NewErrorResponse(
+			http.StatusInternalServerError,
+			"获取文档列表失败: "+err.Error(),
+		))
+		return
+	}
+
+	// 转换为响应格式
+	docInfos := make([]model.DocumentInfo, 0, len(docs))
+	for _, doc := range docs {
+		// 获取段落数量
+		segments := doc.SegmentCount
+
+		docInfo := model.DocumentInfo{
+			FileID:     doc.ID,
+			FileName:   doc.FileName,
+			Status:     string(doc.Status),
+			Tags:       doc.Tags,
+			UploadTime: doc.UploadedAt,
+			UpdatedAt:  doc.UpdatedAt,
+			Segments:   segments,
+			Size:       doc.FileSize,
+			Progress:   doc.Progress,
+		}
+
+		docInfos = append(docInfos, docInfo)
+	}
 
 	// 构建分页响应
 	resp := model.DocumentListResponse{
-		Total:     0,
+		Total:     total,
 		Page:      req.GetPage(),
 		PageSize:  req.GetPageSize(),
-		Documents: []model.DocumentInfo{},
+		Documents: docInfos,
 	}
 
 	c.JSON(http.StatusOK, model.NewSuccessResponse(resp))
@@ -265,6 +325,110 @@ func (h *DocumentHandler) DeleteDocument(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, model.NewSuccessResponse(resp))
+}
+
+// UpdateDocument 更新文档信息
+// PATCH /api/documents/:id
+func (h *DocumentHandler) UpdateDocument(c *gin.Context) {
+	// 绑定路径参数
+	var pathParams struct {
+		ID string `uri:"id" binding:"required"`
+	}
+	if err := c.ShouldBindUri(&pathParams); err != nil {
+		c.JSON(http.StatusBadRequest, model.NewErrorResponse(http.StatusBadRequest, "无效的文档ID"))
+		return
+	}
+
+	// 绑定请求体
+	var req struct {
+		Tags string `json:"tags" binding:"omitempty"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, model.NewErrorResponse(
+			http.StatusBadRequest,
+			"无效的请求数据",
+		))
+		return
+	}
+
+	// 更新文档标签
+	if req.Tags != "" {
+		if err := h.documentService.UpdateDocumentTags(c.Request.Context(), pathParams.ID, req.Tags); err != nil {
+			h.logger.WithFields(logrus.Fields{
+				"error":   err.Error(),
+				"file_id": pathParams.ID,
+			}).Error("Failed to update document tags")
+
+			c.JSON(http.StatusInternalServerError, model.NewErrorResponse(
+				http.StatusInternalServerError,
+				"更新文档标签失败",
+			))
+			return
+		}
+	}
+
+	// 获取最新的文档信息
+	docInfo, err := h.documentService.GetDocumentInfo(c.Request.Context(), pathParams.ID)
+	if err != nil {
+		h.logger.WithFields(logrus.Fields{
+			"error":   err.Error(),
+			"file_id": pathParams.ID,
+		}).Error("Failed to get updated document info")
+
+		c.JSON(http.StatusInternalServerError, model.NewErrorResponse(
+			http.StatusInternalServerError,
+			"获取更新后的文档信息失败",
+		))
+		return
+	}
+
+	// 返回更新成功的响应
+	resp := model.DocumentUpdateResponse{
+		Success:  true,
+		FileID:   pathParams.ID,
+		FileName: docInfo["filename"].(string),
+		Status:   docInfo["status"].(string),
+	}
+
+	c.JSON(http.StatusOK, model.NewSuccessResponse(resp))
+}
+
+// GetDocumentMetrics 获取文档统计信息
+// GET /api/documents/metrics
+func (h *DocumentHandler) GetDocumentMetrics(c *gin.Context) {
+	// 获取各状态的文档计数
+	ctx := c.Request.Context()
+
+	// 获取上传状态的文档
+	uploadedFilter := map[string]interface{}{"status": models.DocStatusUploaded}
+	_, uploadedCount, _ := h.documentService.ListDocuments(ctx, 0, 0, uploadedFilter)
+
+	// 获取处理中的文档
+	processingFilter := map[string]interface{}{"status": models.DocStatusProcessing}
+	_, processingCount, _ := h.documentService.ListDocuments(ctx, 0, 0, processingFilter)
+
+	// 获取完成的文档
+	completedFilter := map[string]interface{}{"status": models.DocStatusCompleted}
+	_, completedCount, _ := h.documentService.ListDocuments(ctx, 0, 0, completedFilter)
+
+	// 获取失败的文档
+	failedFilter := map[string]interface{}{"status": models.DocStatusFailed}
+	_, failedCount, _ := h.documentService.ListDocuments(ctx, 0, 0, failedFilter)
+
+	// 获取所有文档
+	_, totalCount, _ := h.documentService.ListDocuments(ctx, 0, 0, nil)
+
+	// 构建并返回响应
+	metrics := map[string]interface{}{
+		"total":      totalCount,
+		"uploaded":   uploadedCount,
+		"processing": processingCount,
+		"completed":  completedCount,
+		"failed":     failedCount,
+	}
+
+	c.JSON(http.StatusOK, model.NewSuccessResponse(metrics))
 }
 
 // isValidFileType 检查文件类型是否有效
