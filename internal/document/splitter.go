@@ -69,7 +69,8 @@ func (s *TextSplitter) Split(text string) ([]Content, error) {
 		chunks = s.handleLargeChunks(chunks)
 	case BySentence:
 		chunks = s.splitBySentence(text)
-		chunks = s.mergeSmallChunks(chunks)
+		// 不对句子进行合并
+		// chunks = s.mergeSmallChunks(chunks)
 		chunks = s.handleLargeChunks(chunks)
 	case ByLength:
 		chunks = s.splitByLength(text)
@@ -114,8 +115,6 @@ func (s *TextSplitter) preprocessText(text string) string {
 // splitByParagraph 按段落分割文本
 func (s *TextSplitter) splitByParagraph(text string) []string {
 	// 使用正则表达式匹配段落分隔
-	// 更智能地识别段落边界：空行、markdown标题格式等
-	// 中英文混合文档的段落处理
 	paragraphSplitter := regexp.MustCompile(`(?m)^\s*$|^#{1,6}\s|^\*\s`)
 	parts := paragraphSplitter.Split(text, -1)
 
@@ -159,17 +158,20 @@ func (s *TextSplitter) splitBySentence(text string) []string {
 	// 支持更多标点符号：英文句号、问号、感叹号，以及中文句号、问号、感叹号等
 	sentenceDelimiters := []string{".", "!", "?", "。", "！", "？", "；", ";"}
 
+	//fmt.Println("Origin text:", text)
+
 	var sentences []string
 	var currentSentence strings.Builder
 	var inQuote bool // 跟踪是否在引号内部
 
 	// 一次扫描文本，构建句子
-	for _, char := range text {
+	for i, char := range text {
 		currentSentence.WriteRune(char)
 
 		// 判断引号状态
-		if char == '"' || char == '"' || char == '"' {
+		if char == '"' {
 			inQuote = !inQuote
+			fmt.Printf("Position %d: Quoto status changed in %v\n", i, inQuote)
 		}
 
 		// 检查是否是句子结束（不在引号内部时）
@@ -179,6 +181,7 @@ func (s *TextSplitter) splitBySentence(text string) []string {
 			for _, delimiter := range sentenceDelimiters {
 				if charStr == delimiter {
 					isSentenceEnd = true
+					//fmt.Printf("Position %d: Detect sentence end char '%s'\n", i, charStr)
 					break
 				}
 			}
@@ -186,8 +189,10 @@ func (s *TextSplitter) splitBySentence(text string) []string {
 			// 如果是句子结束，且下一个字符是空格或换行等
 			if isSentenceEnd {
 				sentence := strings.TrimSpace(currentSentence.String())
+				//fmt.Printf("Detect sentence end: '%s'\n", sentence)
 				if sentence != "" {
 					sentences = append(sentences, sentence)
+					//fmt.Printf("Add sentence: '%s', current sentence number: %d\n", sentence, len(sentences))
 					currentSentence.Reset()
 				}
 			}
@@ -200,6 +205,10 @@ func (s *TextSplitter) splitBySentence(text string) []string {
 		sentences = append(sentences, lastSentence)
 	}
 
+	//fmt.Printf("Final sentence numbers: %d\n", len(sentences))
+	//for i, s := range sentences {
+	//	fmt.Printf("Sentence %d: '%s'\n", i, s)
+	//}
 	return sentences
 }
 
@@ -207,38 +216,55 @@ func (s *TextSplitter) splitBySentence(text string) []string {
 func (s *TextSplitter) splitByLength(text string) []string {
 	var chunks []string
 
+	//fmt.Printf("splitByLength: text length = %d bytes, ChunkSize = %d, ChunkOverlap = %d\n",
+	//	len(text), s.config.ChunkSize, s.config.ChunkOverlap)
+
 	// 对于按字符分割，需要考虑不切断单词和词组
 	for i := 0; i < len(text); i += s.config.ChunkSize - s.config.ChunkOverlap {
-		end := i + s.config.ChunkSize
-		if end > len(text) {
-			end = len(text)
+		endPos := i + s.config.ChunkSize
+		if endPos > len(text) {
+			endPos = len(text)
 		}
 
+		//fmt.Printf("Iteration: start=%d, initial end=%d\n", i, endPos)
+
 		// 寻找单词边界或句子边界作为截断点
-		if end < len(text) {
+		adjustedEnd := endPos
+		if endPos < len(text) {
 			// 优先寻找句子结束的位置（句号、问号、感叹号等）
-			sentenceEndPos := s.findSentenceEnd(text, i, end)
-			if sentenceEndPos > i {
-				end = sentenceEndPos
+			sentenceEndPos := s.findSentenceEnd(text, i, endPos)
+			if sentenceEndPos > i && sentenceEndPos <= endPos { // 确保不超过 chunkSize
+				adjustedEnd = sentenceEndPos
+				//fmt.Printf("  Found sentence boundary at %d\n", adjustedEnd)
 			} else {
 				// 其次寻找段落边界（换行符）
-				paraEndPos := strings.LastIndex(text[i:end], "\n")
+				paraEndPos := strings.LastIndex(text[i:endPos], "\n")
 				if paraEndPos > 0 {
-					end = i + paraEndPos + 1
+					adjustedEnd = i + paraEndPos + 1
+					if adjustedEnd <= endPos { // 确保不超过 chunkSize
+						//fmt.Printf("  Found paragraph boundary at %d\n", adjustedEnd)
+					} else {
+						adjustedEnd = endPos // 如果超过了，使用原始边界
+					}
 				} else {
 					// 最后尝试在单词边界截断
-					wordEndPos := s.findWordBoundary(text, i, end)
-					if wordEndPos > i {
-						end = wordEndPos
+					wordEndPos := s.findWordBoundary(text, i, endPos)
+					if wordEndPos > i && wordEndPos <= endPos { // 确保不超过 chunkSize
+						adjustedEnd = wordEndPos
+						//fmt.Printf("  Found word boundary at %d\n", adjustedEnd)
 					}
 				}
 			}
 		}
 
-		chunk := text[i:end]
-		chunks = append(chunks, strings.TrimSpace(chunk))
+		chunk := text[i:adjustedEnd]
+		trimmedChunk := strings.TrimSpace(chunk)
+		//fmt.Printf("  Chunk before trim: length=%d, after trim: length=%d\n",
+		//	len(chunk), len(trimmedChunk))
 
-		if end == len(text) {
+		chunks = append(chunks, trimmedChunk)
+
+		if adjustedEnd == len(text) {
 			break
 		}
 	}
@@ -261,15 +287,20 @@ func (s *TextSplitter) findSentenceEnd(text string, start, end int) int {
 
 // findWordBoundary 寻找适合的单词边界
 func (s *TextSplitter) findWordBoundary(text string, start, end int) int {
+	//fmt.Printf("  findWordBoundary: searching from %d back to %d\n",
+	//	end-1, start+s.config.ChunkSize/2)
+
 	// 从末尾向前查找空格或标点
 	for i := end - 1; i >= start+s.config.ChunkSize/2; i-- {
 		r := rune(text[i])
 		if unicode.IsSpace(r) || unicode.IsPunct(r) {
+			//fmt.Printf("    Found boundary at %d: '%c'\n", i+1, r)
 			return i + 1
 		}
 	}
 
 	// 找不到合适的边界，就使用原始截断点
+	//fmt.Printf("    No suitable boundary found, using original end: %d\n", end)
 	return end
 }
 
@@ -362,6 +393,12 @@ func (s *TextSplitter) splitChineseSentences(text string) []string {
 	var currentSentence strings.Builder
 
 	for _, char := range text {
+		// If adding this character would exceed chunk size and we have content
+		if currentSentence.Len() >= s.config.ChunkSize && currentSentence.Len() > 0 {
+			sentences = append(sentences, strings.TrimSpace(currentSentence.String()))
+			currentSentence.Reset()
+		}
+
 		currentSentence.WriteRune(char)
 
 		// 检查是否是句子结束
@@ -373,6 +410,7 @@ func (s *TextSplitter) splitChineseSentences(text string) []string {
 			}
 		}
 
+		// 如果已经到达句子末尾，把它加入到结果中
 		if isSentenceEnd {
 			sentences = append(sentences, strings.TrimSpace(currentSentence.String()))
 			currentSentence.Reset()

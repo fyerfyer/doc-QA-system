@@ -8,7 +8,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestSplitByParagraph 测试按段落分割功能
 func TestSplitByParagraph(t *testing.T) {
 	config := DefaultSplitterConfig()
 	splitter := NewTextSplitter(config)
@@ -17,11 +16,11 @@ func TestSplitByParagraph(t *testing.T) {
 		text := "这是一个测试文档内容。\n\n这是第二段落。\n\n这是第三段落。"
 		segments, err := splitter.Split(text)
 		assert.NoError(t, err)
-		assert.Equal(t, 3, len(segments), "应该分割成3个段落")
+		assert.Equal(t, 3, len(segments), "should be split into 3 paragraphs")
 
-		t.Logf("段落数量: %d", len(segments))
+		t.Logf("paragraph numbers: %d", len(segments))
 		for i, seg := range segments {
-			t.Logf("段落 %d: '%s'", i, seg.Text)
+			t.Logf("paragraph %d: '%s'", i, seg.Text)
 		}
 
 		// 验证段落内容
@@ -35,13 +34,13 @@ func TestSplitByParagraph(t *testing.T) {
 		segments, err := splitter.Split(text)
 		assert.NoError(t, err)
 
-		t.Logf("单换行段落数量: %d", len(segments))
+		t.Logf("paragraph numbers with single newline: %d", len(segments))
 		for i, seg := range segments {
-			t.Logf("段落 %d: '%s'", i, seg.Text)
+			t.Logf("paragraph %d: '%s'", i, seg.Text)
 		}
 
 		// 单换行通常会被合并为一个段落，除非有其他段落标记
-		assert.LessOrEqual(t, len(segments), 3, "单换行应该被视为段落的一部分")
+		assert.LessOrEqual(t, len(segments), 3, "Single newline should be treated as part of a paragraph")
 	})
 
 	t.Run("markdown headers", func(t *testing.T) {
@@ -49,17 +48,16 @@ func TestSplitByParagraph(t *testing.T) {
 		segments, err := splitter.Split(text)
 		assert.NoError(t, err)
 
-		t.Logf("带Markdown标题的段落数量: %d", len(segments))
+		t.Logf("paragraph numbers with Markdown headers: %d", len(segments))
 		for i, seg := range segments {
-			t.Logf("段落 %d: '%s'", i, seg.Text)
+			t.Logf("paragraph %d: '%s'", i, seg.Text)
 		}
 
 		// Markdown标题应该被识别为段落分隔符
-		assert.GreaterOrEqual(t, len(segments), 3, "Markdown标题应该被分割为单独的段落")
+		assert.GreaterOrEqual(t, len(segments), 3, "Markdown headers should be split as separate paragraphs")
 	})
 }
 
-// TestSplitBySentence 测试按句子分割功能
 func TestSplitBySentence(t *testing.T) {
 	// 创建按句子分割的配置
 	config := DefaultSplitterConfig()
@@ -71,13 +69,13 @@ func TestSplitBySentence(t *testing.T) {
 		segments, err := splitter.Split(text)
 		assert.NoError(t, err)
 
-		t.Logf("句子数量: %d", len(segments))
+		t.Logf("sentence numbers: %d", len(segments))
 		for i, seg := range segments {
-			t.Logf("句子 %d: '%s'", i, seg.Text)
+			t.Logf("sentence %d: '%s'", i, seg.Text)
 		}
 
 		// 验证句子分割
-		assert.GreaterOrEqual(t, len(segments), 3, "应该至少分割成3个句子")
+		assert.GreaterOrEqual(t, len(segments), 3, "Should be split into at least 3 sentences")
 		// 验证第一个句子内容
 		if len(segments) >= 1 {
 			assert.Contains(t, segments[0].Text, "第一个句子")
@@ -89,13 +87,13 @@ func TestSplitBySentence(t *testing.T) {
 		segments, err := splitter.Split(text)
 		assert.NoError(t, err)
 
-		t.Logf("中文句子数量: %d", len(segments))
+		t.Logf("Chinese sentence numbers: %d", len(segments))
 		for i, seg := range segments {
-			t.Logf("句子 %d: '%s'", i, seg.Text)
+			t.Logf("sentence %d: '%s'", i, seg.Text)
 		}
 
 		// 验证中文句子分割
-		assert.GreaterOrEqual(t, len(segments), 3, "应该至少分割成3个句子")
+		assert.GreaterOrEqual(t, len(segments), 3, "Should be split into at least 3 sentences")
 	})
 
 	t.Run("mixed language sentences", func(t *testing.T) {
@@ -103,17 +101,16 @@ func TestSplitBySentence(t *testing.T) {
 		segments, err := splitter.Split(text)
 		assert.NoError(t, err)
 
-		t.Logf("混合语言句子数量: %d", len(segments))
+		t.Logf("mixed language sentence numbers: %d", len(segments))
 		for i, seg := range segments {
-			t.Logf("句子 %d: '%s'", i, seg.Text)
+			t.Logf("sentence %d: '%s'", i, seg.Text)
 		}
 
 		// 验证混合语言句子分割
-		assert.GreaterOrEqual(t, len(segments), 3, "应该正确分割中英文混合的句子")
+		assert.GreaterOrEqual(t, len(segments), 3, "Should correctly split mixed Chinese and English sentences")
 	})
 }
 
-// TestSplitByLength 测试按长度分割功能
 func TestSplitByLength(t *testing.T) {
 	t.Run("chunk size constraint", func(t *testing.T) {
 		// 创建限制长度的配置
@@ -128,14 +125,14 @@ func TestSplitByLength(t *testing.T) {
 		segments, err := splitter.Split(longText)
 		assert.NoError(t, err)
 
-		t.Logf("按长度分割后的段落数量: %d", len(segments))
+		t.Logf("number of paragraphs after splitting by length: %d", len(segments))
 		for i, seg := range segments {
-			t.Logf("段落 %d (长度=%d): '%s'...", i, len(seg.Text), seg.Text[:min(20, len(seg.Text))])
+			t.Logf("paragraph %d (length=%d): '%s'...", i, len(seg.Text), seg.Text[:min(20, len(seg.Text))])
 		}
 
 		// 验证每个段落长度不超过ChunkSize
 		for _, seg := range segments {
-			assert.LessOrEqual(t, len(seg.Text), config.ChunkSize, "每个分段不应超过ChunkSize")
+			assert.LessOrEqual(t, len(seg.Text), config.ChunkSize, "Each chunk should not exceed ChunkSize")
 		}
 	})
 
@@ -151,21 +148,21 @@ func TestSplitByLength(t *testing.T) {
 		segments, err := splitter.Split(text)
 		assert.NoError(t, err)
 
-		t.Logf("带重叠的分段数量: %d", len(segments))
+		t.Logf("number of chunks with overlap: %d", len(segments))
 		for i, seg := range segments {
-			t.Logf("段落 %d: '%s'", i, seg.Text)
+			t.Logf("chunk %d: '%s'", i, seg.Text)
 		}
 
 		// 应该有两个段落，第二个段落开始应该包含第一个段落的结尾部分
 		if len(segments) >= 2 {
 			lastCharsOfFirst := segments[0].Text[len(segments[0].Text)-config.ChunkOverlap:]
 			firstCharsOfSecond := segments[1].Text[:config.ChunkOverlap]
-			assert.Equal(t, lastCharsOfFirst, firstCharsOfSecond, "段落之间应有指定的重叠")
+			assert.Equal(t, lastCharsOfFirst, firstCharsOfSecond, "Chunks should have specified overlap")
 		}
 	})
 }
 
-// TestHandleLargeChunks 测试处理过长段落的功能
+// 测试处理过长段落的功能
 func TestHandleLargeChunks(t *testing.T) {
 	config := DefaultSplitterConfig()
 	config.ChunkSize = 50
@@ -177,19 +174,19 @@ func TestHandleLargeChunks(t *testing.T) {
 	segments, err := splitter.Split(longParagraph)
 	assert.NoError(t, err)
 
-	t.Logf("长段落分割后的块数: %d", len(segments))
+	t.Logf("number of chunks after splitting long paragraph: %d", len(segments))
 	for i, seg := range segments {
-		t.Logf("块 %d (长度=%d): '%s'...", i, len(seg.Text), seg.Text[:min(20, len(seg.Text))])
+		t.Logf("chunk %d (length=%d): '%s'...", i, len(seg.Text), seg.Text[:min(20, len(seg.Text))])
 	}
 
 	// 验证长段落已经被分割成多个较小的块
-	assert.Greater(t, len(segments), 1, "长段落应被分割成多个块")
+	assert.Greater(t, len(segments), 1, "Long paragraph should be split into multiple chunks")
 	for _, seg := range segments {
-		assert.LessOrEqual(t, len(seg.Text), config.ChunkSize+10, "每个块不应大幅超过ChunkSize")
+		assert.LessOrEqual(t, len(seg.Text), config.ChunkSize+10, "Each chunk should not significantly exceed ChunkSize")
 	}
 }
 
-// TestCustomSplitterConfig 测试自定义分段器配置
+// 测试自定义分段器配置
 func TestCustomSplitterConfig(t *testing.T) {
 	t.Run("custom chunk size", func(t *testing.T) {
 		// 使用更小的块大小
@@ -202,15 +199,15 @@ func TestCustomSplitterConfig(t *testing.T) {
 		segments, err := splitter.Split(text)
 		assert.NoError(t, err)
 
-		t.Logf("自定义块大小分割后段落数: %d", len(segments))
+		t.Logf("number of paragraphs after custom chunk size: %d", len(segments))
 		for i, seg := range segments {
-			t.Logf("段落 %d (长度=%d): '%s'", i, len(seg.Text), seg.Text)
+			t.Logf("paragraph %d (length=%d): '%s'", i, len(seg.Text), seg.Text)
 		}
 
 		// 验证段落被适当分割
-		assert.Greater(t, len(segments), 1, "应该被分割成多个块")
+		assert.Greater(t, len(segments), 1, "Should be split into multiple chunks")
 		for _, seg := range segments {
-			assert.LessOrEqual(t, len(seg.Text), config.ChunkSize+5, "每个块不应大幅超过ChunkSize")
+			assert.LessOrEqual(t, len(seg.Text), config.ChunkSize+5, "Each chunk should not significantly exceed ChunkSize")
 		}
 	})
 
@@ -226,17 +223,17 @@ func TestCustomSplitterConfig(t *testing.T) {
 		segments, err := splitter.Split(longText)
 		assert.NoError(t, err)
 
-		t.Logf("应用最大块数限制后段落数: %d", len(segments))
+		t.Logf("number of paragraphs after applying max chunks limit: %d", len(segments))
 		for i, seg := range segments {
-			t.Logf("段落 %d: '%s'", i, seg.Text)
+			t.Logf("paragraph %d: '%s'", i, seg.Text)
 		}
 
 		// 验证块数不超过MaxChunks
-		assert.LessOrEqual(t, len(segments), config.MaxChunks, "段落数不应超过MaxChunks")
+		assert.LessOrEqual(t, len(segments), config.MaxChunks, "Number of chunks should not exceed MaxChunks")
 	})
 }
 
-// TestPreprocessText 测试文本预处理功能
+// 测试文本预处理功能
 func TestPreprocessText(t *testing.T) {
 	splitter := NewTextSplitter(DefaultSplitterConfig())
 
@@ -247,7 +244,7 @@ func TestPreprocessText(t *testing.T) {
 
 		// 应该将所有换行符统一为\n
 		expected := "行1\n行2\n行3\n行4"
-		assert.Equal(t, expected, processed, "应该将所有换行符规范化为\\n")
+		assert.Equal(t, expected, processed, "All line endings should be normalized to \\n")
 	})
 
 	t.Run("remove excessive newlines", func(t *testing.T) {
@@ -257,7 +254,7 @@ func TestPreprocessText(t *testing.T) {
 
 		// 应该将连续的换行符减少到最多两个
 		expected := "段落1\n\n段落2\n\n段落3"
-		assert.Equal(t, expected, processed, "应该移除过多的连续换行符")
+		assert.Equal(t, expected, processed, "Excessive consecutive newlines should be removed")
 	})
 
 	t.Run("trim whitespace", func(t *testing.T) {
@@ -267,24 +264,24 @@ func TestPreprocessText(t *testing.T) {
 
 		// 应该移除首尾的空白
 		expected := "测试文本"
-		assert.Equal(t, expected, processed, "应该移除首尾的空白")
+		assert.Equal(t, expected, processed, "Leading and trailing whitespace should be removed")
 	})
 }
 
-// TestEmptyInput 测试空输入的处理
+// 测试空输入的处理
 func TestEmptyInput(t *testing.T) {
 	splitter := NewTextSplitter(DefaultSplitterConfig())
 
 	segments, err := splitter.Split("")
 	assert.NoError(t, err)
-	assert.Empty(t, segments, "空输入应返回空段落列表")
+	assert.Empty(t, segments, "Empty input should return empty segment list")
 
 	segments, err = splitter.Split("   \n\t   ")
 	assert.NoError(t, err)
-	assert.Empty(t, segments, "只包含空白的输入应返回空段落列表")
+	assert.Empty(t, segments, "Input with only whitespace should return empty segment list")
 }
 
-// TestChineneTextSplitting 特别测试中文文本分割
+// 特别测试中文文本分割
 func TestChineseTextSplitting(t *testing.T) {
 	config := DefaultSplitterConfig()
 	config.SplitType = BySentence
@@ -296,13 +293,13 @@ func TestChineseTextSplitting(t *testing.T) {
 	segments, err := splitter.Split(chineseText)
 	require.NoError(t, err)
 
-	t.Logf("中文句子分割结果，共 %d 个句子:", len(segments))
+	t.Logf("Chinese sentence split result, total %d sentences:", len(segments))
 	for i, seg := range segments {
-		t.Logf("句子 %d: '%s'", i, seg.Text)
+		t.Logf("sentence %d: '%s'", i, seg.Text)
 	}
 
 	// 应该分割成5个句子
-	assert.GreaterOrEqual(t, len(segments), 4, "中文文本应该被正确分割成多个句子")
+	assert.GreaterOrEqual(t, len(segments), 4, "Chinese text should be correctly split into multiple sentences")
 
 	// 验证第一个句子
 	if len(segments) > 0 {
@@ -310,20 +307,20 @@ func TestChineseTextSplitting(t *testing.T) {
 	}
 }
 
-// TestEdgeCases 测试边缘情况
+// 测试边缘情况
 func TestEdgeCases(t *testing.T) {
 	splitter := NewTextSplitter(DefaultSplitterConfig())
 
 	t.Run("single character", func(t *testing.T) {
 		segments, err := splitter.Split("A")
 		assert.NoError(t, err)
-		assert.Len(t, segments, 1, "单个字符应作为一个段落")
+		assert.Len(t, segments, 1, "A single character should be treated as one paragraph")
 	})
 
 	t.Run("only punctuation", func(t *testing.T) {
 		segments, err := splitter.Split(".,!?;:")
 		assert.NoError(t, err)
-		assert.Len(t, segments, 1, "只包含标点符号的文本应作为一个段落")
+		assert.Len(t, segments, 1, "Text with only punctuation should be treated as one paragraph")
 	})
 
 	t.Run("complex formatting", func(t *testing.T) {
@@ -331,20 +328,11 @@ func TestEdgeCases(t *testing.T) {
 		text := "# 标题\n\n* 项目1\n* 项目2\n\n> 引用文本\n\n```\n代码块\n```"
 		segments, err := splitter.Split(text)
 		assert.NoError(t, err)
-		assert.NotEmpty(t, segments, "应能处理复杂格式的文本")
+		assert.NotEmpty(t, segments, "Should handle complex formatted text")
 
-		t.Logf("复杂格式文本分割结果，共 %d 个段落:", len(segments))
+		t.Logf("complex formatted text split result, total %d paragraphs:", len(segments))
 		for i, seg := range segments {
-			t.Logf("段落 %d: '%s'", i, seg.Text)
+			t.Logf("paragraph %d: '%s'", i, seg.Text)
 		}
 	})
-}
-
-// min 返回两个整数中较小的一个
-// Go 1.21之前没有内置的min函数
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
