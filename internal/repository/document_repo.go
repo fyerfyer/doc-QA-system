@@ -19,7 +19,17 @@ type docRepository struct {
 // NewDocumentRepository 创建文档仓储实例
 func NewDocumentRepository() DocumentRepository {
 	return &docRepository{
-		db: database.DB,
+		db: database.MustDB(),
+	}
+}
+
+// NewDocumentRepositoryWithDB 使用指定的数据库连接创建文档仓储实例
+func NewDocumentRepositoryWithDB(db *gorm.DB) DocumentRepository {
+	if db == nil {
+		db = database.MustDB()
+	}
+	return &docRepository{
+		db: db,
 	}
 }
 

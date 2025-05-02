@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/fyerfyer/doc-QA-system/internal/models"
@@ -14,7 +15,21 @@ import (
 )
 
 // DB 全局数据库连接
-var DB *gorm.DB
+var (
+	DB   *gorm.DB
+	once sync.Once
+	log  *logrus.Logger
+)
+
+// InitLogger sets the logger for database operations
+func InitLogger(logger *logrus.Logger) {
+	log = logger
+	if log == nil {
+		// Create a default logger if none provided
+		log = logrus.New()
+		log.SetLevel(logrus.InfoLevel)
+	}
+}
 
 // Config 数据库配置
 type Config struct {
@@ -37,7 +52,30 @@ func DefaultConfig() *Config {
 }
 
 // Setup 设置并初始化数据库连接
-func Setup(cfg *Config, log *logrus.Logger) error {
+func Setup(cfg *Config, logger *logrus.Logger) error {
+	InitLogger(logger)
+
+	var err error
+	once.Do(func() {
+		err = setupDB(cfg)
+	})
+	return err
+}
+
+// MustDB returns the database connection, initializing it with default config if not already initialized
+func MustDB() *gorm.DB {
+	if DB == nil {
+		// Initialize with default configuration if not already set
+		err := Setup(DefaultConfig(), log)
+		if err != nil {
+			panic(fmt.Sprintf("failed to initialize database connection: %v", err))
+		}
+	}
+	return DB
+}
+
+// setupDB is the actual implementation of database setup
+func setupDB(cfg *Config) error {
 	var err error
 	var dialector gorm.Dialector
 
@@ -88,7 +126,9 @@ func Setup(cfg *Config, log *logrus.Logger) error {
 		return fmt.Errorf("failed to auto migrate: %v", err)
 	}
 
-	log.Info("Database connection established successfully")
+	if log != nil {
+		log.Info("Database connection established successfully")
+	}
 	return nil
 }
 
@@ -148,5 +188,7 @@ type logrusWriter struct {
 
 // Printf 实现io.Writer接口，将GORM日志转发到logrus
 func (w *logrusWriter) Printf(format string, args ...interface{}) {
-	w.logger.Tracef(format, args...)
+	if w.logger != nil {
+		w.logger.Tracef(format, args...)
+	}
 }
