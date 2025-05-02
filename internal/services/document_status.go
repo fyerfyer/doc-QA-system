@@ -110,10 +110,12 @@ func (m *DocumentStatusManager) MarkAsCompleted(ctx context.Context, docID strin
 		return err
 	}
 
-	// 更新文档记录，添加段落数量
+	// 更新文档记录，添加段落数量并设置处理完成时间
 	doc.Status = models.DocStatusCompleted
 	doc.SegmentCount = segmentCount
 	doc.Progress = 100
+	now := time.Now()
+	doc.ProcessedAt = &now
 	return m.repo.Update(doc)
 }
 
@@ -231,4 +233,9 @@ func getFileType(fileName string) string {
 		ext = string(fileName[i]) + ext
 	}
 	return ext
+}
+
+// GetRepo 获取文档仓储
+func (m *DocumentStatusManager) GetRepo() repository.DocumentRepository {
+	return m.repo
 }

@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -14,8 +15,9 @@ import (
 )
 
 func setupTestDB(t *testing.T) (*gorm.DB, func()) {
-	// 使用内存数据库进行测试
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	// 使用唯一的内存数据库标识符
+	dbName := fmt.Sprintf("file:memdb_%d?mode=memory", time.Now().UnixNano())
+	db, err := gorm.Open(sqlite.Open(dbName), &gorm.Config{})
 	require.NoError(t, err, "Failed to open in-memory database")
 
 	// 运行迁移以创建所需的表
