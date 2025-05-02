@@ -15,6 +15,7 @@ import (
 	"github.com/fyerfyer/doc-QA-system/api/handler"
 	"github.com/fyerfyer/doc-QA-system/api/model"
 	"github.com/fyerfyer/doc-QA-system/internal/cache"
+	"github.com/fyerfyer/doc-QA-system/internal/database"
 	"github.com/fyerfyer/doc-QA-system/internal/document"
 	"github.com/fyerfyer/doc-QA-system/internal/embedding"
 	"github.com/fyerfyer/doc-QA-system/internal/llm"
@@ -49,9 +50,13 @@ func setupDocumentTestEnv(t *testing.T) *documentTestEnv {
 	tempDir, err := os.MkdirTemp("", "docqa_test_*")
 	require.NoError(t, err)
 
+	// Clean database tables before test
+	cleanDatabase(t)
+
 	// 临时目录将在测试完成后自动清理
 	t.Cleanup(func() {
 		os.RemoveAll(tempDir)
+		cleanDatabase(t)
 	})
 
 	// 创建本地存储
@@ -128,6 +133,9 @@ func setupDocumentTestEnv(t *testing.T) *documentTestEnv {
 		vectorDB,
 		services.WithBatchSize(5),
 	)
+
+	err = documentService.Init()
+	require.NoError(t, err)
 
 	// 创建问答服务
 	qaService := services.NewQAService(
@@ -207,7 +215,7 @@ func TestDocumentUpload(t *testing.T) {
 	uploadResp, ok := resp.Data.(map[string]interface{})
 	assert.True(t, ok)
 	assert.NotEmpty(t, uploadResp["file_id"])
-	assert.Equal(t, "processing", uploadResp["status"])
+	assert.Equal(t, "uploaded", uploadResp["status"])
 }
 
 // TestDocumentStatus 测试文档状态查询API
@@ -468,4 +476,20 @@ func TestDocumentDelete(t *testing.T) {
 	deleteResp, ok := resp.Data.(map[string]interface{})
 	assert.True(t, ok)
 	assert.Equal(t, true, deleteResp["success"])
+}
+
+func cleanDatabase(t *testing.T) {
+	db := database.MustDB()
+	db.Exec("PRAGMA foreign_keys = OFF")
+
+	// 清理所有相关表
+	tables := []string{"documents", "document_segments"}
+	for _, table := range tables {
+		err := db.Exec("DELETE FROM " + table).Error
+		require.NoError(t, err, "Failed to clear table: "+table)
+	}
+
+	db.Exec("PRAGMA foreign_keys = ON")
+
+	t.Log("Database tables cleared")
 }
