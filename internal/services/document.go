@@ -17,27 +17,19 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// 文档处理状态
-const (
-	DocStatusPending    = "pending"    // 待处理
-	DocStatusProcessing = "processing" // 处理中
-	DocStatusCompleted  = "completed"  // 已完成
-	DocStatusFailed     = "failed"     // 处理失败
-)
-
 // DocumentService 文档服务
 // 负责协调文档解析、分段、嵌入和存储
 type DocumentService struct {
-	storage           storage.Storage                // 文件存储服务
-	parser            document.Parser                // 文档解析器
-	splitter          document.Splitter              // 文本分段器
-	embedder          embedding.Client               // 嵌入模型客户端
-	vectorDB          vectordb.Repository            // 向量数据库
-	repo              repository.DocumentRepository  // 文档元数据存储
-	statusManager     *DocumentStatusManager         // 文档状态管理器
-	batchSize         int                            // 批处理大小
-	timeout           time.Duration                  // 处理超时时间
-	logger            *logrus.Logger                 // 日志记录器
+	storage       storage.Storage               // 文件存储服务
+	parser        document.Parser               // 文档解析器
+	splitter      document.Splitter             // 文本分段器
+	embedder      embedding.Client              // 嵌入模型客户端
+	vectorDB      vectordb.Repository           // 向量数据库
+	repo          repository.DocumentRepository // 文档元数据存储
+	statusManager *DocumentStatusManager        // 文档状态管理器
+	batchSize     int                           // 批处理大小
+	timeout       time.Duration                 // 处理超时时间
+	logger        *logrus.Logger                // 日志记录器
 }
 
 // DocumentOption 文档服务配置选项

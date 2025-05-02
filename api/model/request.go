@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// 分页请求参数
+// PaginationRequest 分页请求参数
 type PaginationRequest struct {
 	Page     int `form:"page" json:"page" binding:"omitempty,min=1"`           // 当前页码，从1开始
 	PageSize int `form:"page_size" json:"page_size" binding:"omitempty,min=1"` // 每页记录数

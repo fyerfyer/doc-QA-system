@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"github.com/fyerfyer/doc-QA-system/internal/models"
 	"io"
 	"io/ioutil"
 	"os"
@@ -53,7 +54,7 @@ func TestDocumentService(t *testing.T) {
 	docInfo, err := docService.GetDocumentInfo(ctx, fileID)
 	require.NoError(t, err)
 	assert.Equal(t, fileID, docInfo["file_id"])
-	assert.Equal(t, DocStatusCompleted, docInfo["status"])
+	assert.Equal(t, models.DocStatusCompleted, docInfo["status"])
 
 	// 测试删除文档
 	err = docService.DeleteDocument(ctx, fileID)
