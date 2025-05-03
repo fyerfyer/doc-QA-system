@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"path/filepath"
 	"time"
@@ -47,6 +48,12 @@ func (h *DocumentHandler) UploadDocument(c *gin.Context) {
 		))
 		return
 	}
+
+	// Debug logging for tags and content type
+	h.logger.WithFields(logrus.Fields{
+		"tags":         req.Tags,
+		"content_type": c.Request.Header.Get("Content-Type"),
+	}).Debug("Document upload request received with tags")
 
 	// 检查文件
 	if req.File == nil {
@@ -110,8 +117,26 @@ func (h *DocumentHandler) UploadDocument(c *gin.Context) {
 	// 通过状态管理器记录文档上传状态
 	ctx := context.Background()
 	if err := h.documentService.Init(); err == nil {
-		if h.documentService.GetStatusManager() != nil {
-			_ = h.documentService.GetStatusManager().MarkAsUploaded(ctx, fileInfo.ID, fileInfo.Name, fileInfo.Path, fileInfo.Size)
+		docStatusManager := h.documentService.GetStatusManager()
+		if docStatusManager != nil {
+			// Pass the tags from the request to MarkAsUploaded
+			err := docStatusManager.MarkAsUploaded(ctx, fileInfo.ID, filename, fileInfo.Path, fileInfo.Size)
+			if err != nil {
+				h.logger.WithError(err).Warn("Failed to mark document as uploaded")
+			}
+
+			// 更新文档标签
+			if req.Tags != "" {
+				doc, err := docStatusManager.GetDocument(ctx, fileInfo.ID)
+				if err == nil {
+					doc.Tags = req.Tags
+					docStatusManager.GetRepo().Update(doc)
+					h.logger.WithFields(logrus.Fields{
+						"file_id": fileInfo.ID,
+						"tags":    req.Tags,
+					}).Debug("Updated document tags")
+				}
+			}
 		}
 	}
 
@@ -175,10 +200,32 @@ func (h *DocumentHandler) GetDocumentStatus(c *gin.Context) {
 		// 继续处理，不返回错误
 	}
 
+	h.logger.WithFields(logrus.Fields{
+		"status_type":  fmt.Sprintf("%T", docInfo["status"]),
+		"status_value": fmt.Sprintf("%v", docInfo["status"]),
+	}).Debug("Document status type information")
+
+	h.logger.WithFields(logrus.Fields{
+		"doc_id":       req.ID,
+		"raw_doc_info": fmt.Sprintf("%+v", docInfo),
+		"tags_field":   docInfo["tags"],
+	}).Debug("Retrieved document info")
+
+	// Fix the type conversion
+	var statusStr string
+	switch status := docInfo["status"].(type) {
+	case models.DocumentStatus:
+		statusStr = string(status)
+	case string:
+		statusStr = status
+	default:
+		statusStr = fmt.Sprintf("%v", status)
+	}
+
 	// 构建响应
 	resp := model.DocumentStatusResponse{
 		FileID:    req.ID,
-		Status:    docInfo["status"].(string),
+		Status:    statusStr,
 		FileName:  docInfo["filename"].(string),
 		Segments:  segments,
 		CreatedAt: docInfo["created_at"].(string),
@@ -383,12 +430,23 @@ func (h *DocumentHandler) UpdateDocument(c *gin.Context) {
 		return
 	}
 
+	// 修复类型转换问题
+	var statusStr string
+	switch status := docInfo["status"].(type) {
+	case models.DocumentStatus:
+		statusStr = string(status)
+	case string:
+		statusStr = status
+	default:
+		statusStr = fmt.Sprintf("%v", status)
+	}
+
 	// 返回更新成功的响应
 	resp := model.DocumentUpdateResponse{
 		Success:  true,
 		FileID:   pathParams.ID,
 		FileName: docInfo["filename"].(string),
-		Status:   docInfo["status"].(string),
+		Status:   statusStr,
 	}
 
 	c.JSON(http.StatusOK, model.NewSuccessResponse(resp))

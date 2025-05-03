@@ -302,7 +302,26 @@ func (s *QAService) AnswerWithFile(ctx context.Context, question string, fileID 
 	}
 
 	if fileID == "" {
-		return "", nil, fmt.Errorf("fileID cannot be empty")
+		return "", nil, fmt.Errorf("file ID cannot be empty")
+	}
+
+	fmt.Printf("DEBUG: AnswerWithFile - checking if file exists: %s\n", fileID)
+
+	// 验证文件是否存在的逻辑
+	filter := vectordb.SearchFilter{
+		FileIDs:    []string{fileID},
+		MaxResults: 1,
+	}
+
+	// 检查文件是否存在
+	results, err := s.vectorDB.Search(make([]float32, s.vectorDB.GetDimension()), filter)
+	if err != nil {
+		return "", nil, err
+	}
+
+	if len(results) == 0 {
+		// 添加缺失的返回错误逻辑
+		return "", nil, fmt.Errorf("document with ID %s not found", fileID)
 	}
 
 	// 检查是否是问候语
@@ -339,12 +358,12 @@ func (s *QAService) AnswerWithFile(ctx context.Context, question string, fileID 
 	}
 
 	// 检索特定文件中的相关文档
-	filter := vectordb.SearchFilter{
+	filter = vectordb.SearchFilter{
 		FileIDs:    []string{fileID},
 		MinScore:   s.minScore,
 		MaxResults: s.searchLimit,
 	}
-	results, err := s.vectorDB.Search(vector, filter)
+	results, err = s.vectorDB.Search(vector, filter)
 	if err != nil {
 		return "", nil, fmt.Errorf("search failed: %w", err)
 	}

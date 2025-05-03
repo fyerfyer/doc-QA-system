@@ -85,6 +85,9 @@ type Repository interface {
 	// Count 获取文档总数
 	Count() (int, error)
 
+	// GetDimension 返回向量维数
+	GetDimension() int
+
 	// Close 关闭数据库连接
 	Close() error
 }

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"github.com/fyerfyer/doc-QA-system/internal/vectordb"
 	"net/http"
 
@@ -67,6 +68,16 @@ func (h *QAHandler) AnswerQuestion(c *gin.Context) {
 
 		var sourceDocs []vectordb.Document
 		answer, sourceDocs, err = h.qaService.AnswerWithFile(ctx, req.Question, req.FileID)
+		
+		// 添加这行调试日志
+		fmt.Printf("DEBUG: AnswerWithFile returned - err: %v, answer: %s\n", err, answer)
+		
+		h.logger.WithFields(logrus.Fields{
+			"error": err,
+			"answer_received": answer != "",
+			"source_docs_count": len(sourceDocs),
+		}).Debug("Response from AnswerWithFile")
+		
 		if err == nil {
 			sources = model.ConvertToSourceInfo(sourceDocs)
 		}
@@ -98,7 +109,11 @@ func (h *QAHandler) AnswerQuestion(c *gin.Context) {
 		h.logger.WithFields(logrus.Fields{
 			"error":    err.Error(),
 			"question": req.Question,
+			"file_id":  req.FileID,
 		}).Error("Failed to answer question")
+
+		// 添加这行调试日志
+		fmt.Printf("DEBUG: Error handling triggered with error: %v\n", err)
 
 		c.JSON(http.StatusInternalServerError, model.NewErrorResponse(
 			http.StatusInternalServerError,

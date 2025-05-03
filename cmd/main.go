@@ -17,9 +17,11 @@ import (
 
 	"github.com/fyerfyer/doc-QA-system/api/handler"
 	"github.com/fyerfyer/doc-QA-system/internal/cache"
+	"github.com/fyerfyer/doc-QA-system/internal/database"
 	"github.com/fyerfyer/doc-QA-system/internal/document"
 	"github.com/fyerfyer/doc-QA-system/internal/embedding"
 	"github.com/fyerfyer/doc-QA-system/internal/llm"
+	"github.com/fyerfyer/doc-QA-system/internal/repository"
 	"github.com/fyerfyer/doc-QA-system/internal/services"
 	"github.com/fyerfyer/doc-QA-system/internal/vectordb"
 	"github.com/fyerfyer/doc-QA-system/pkg/storage"
@@ -43,6 +45,7 @@ type config struct {
 	LogLevel        string        // 日志级别
 	ReadTimeout     time.Duration // 读取超时
 	WriteTimeout    time.Duration // 写入超时
+	DataDir         string        // 数据目录路径
 }
 
 func main() {
@@ -55,6 +58,11 @@ func main() {
 	// 初始化日志
 	logger := setupLogger(cfg.LogLevel)
 	logger.Info("Starting Document QA System...")
+
+	// 初始化数据库
+	if err := setupDatabase(cfg, logger); err != nil {
+		logger.Fatalf("Failed to initialize database: %v", err)
+	}
 
 	// 创建文件存储服务
 	fileStorage, err := setupStorage(cfg)
@@ -101,12 +109,16 @@ func main() {
 	)
 
 	// 初始化业务服务
+	repo := repository.NewDocumentRepository()
+	statusManager := services.NewDocumentStatusManager(repo, logger)
+
 	documentService := services.NewDocumentService(
 		fileStorage,
 		nil, // document.Parser通过调用ParserFactory动态创建
 		splitter,
 		embeddingClient,
 		vectorDB,
+		services.WithStatusManager(statusManager),
 		services.WithBatchSize(16),
 	)
 
@@ -193,6 +205,9 @@ func parseFlags() config {
 
 	// 缓存配置
 	flag.StringVar(&cfg.CacheType, "cache", "memory", "Cache type (memory/redis)")
+
+	// 数据目录配置
+	flag.StringVar(&cfg.DataDir, "data-dir", "./data", "Data directory path")
 
 	// 从环境变量获取API密钥（优先级高于命令行参数）
 	if key := os.Getenv("TONGYI_API_KEY"); key != "" {
@@ -323,4 +338,22 @@ func setupCache(cfg config) (cache.Cache, error) {
 	}
 
 	return cache.NewCache(cacheConfig)
+}
+
+// setupDatabase 设置数据库
+func setupDatabase(cfg config, logger *logrus.Logger) error {
+	dbPath := filepath.Join(cfg.DataDir, "docqa.db")
+
+	// 确保数据目录存在
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
+		return fmt.Errorf("failed to create database directory: %v", err)
+	}
+
+	// 初始化数据库
+	dbConfig := &database.Config{
+		Type: "sqlite",
+		DSN:  dbPath,
+	}
+
+	return database.Setup(dbConfig, logger)
 }

@@ -50,8 +50,23 @@ services:
       timeout: 5s
       retries: 3
 
+  # 创建用于测试的数据目录
+  datadir:
+    image: busybox
+    container_name: docqa-datadir
+    volumes:
+      - docqa_data:/data
+    command: >
+      /bin/sh -c "
+      mkdir -p /data/files /data/vectordb /data/db;
+      chmod -R 777 /data;
+      tail -f /dev/null
+      "
+
 volumes:
   minio_data:
     name: docqa-minio-data
   redis_data:
     name: docqa-redis-data
+  docqa_data:
+    name: docqa-data

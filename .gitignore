@@ -30,3 +30,4 @@ go.work.sum
 /node_modules
 /cmake-3.26.5
 /faiss
+/logs

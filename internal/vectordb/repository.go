@@ -12,7 +12,6 @@ import (
 // BaseRepository 基础仓库实现
 // 为各种具体的向量数据库实现提供共享功能
 type BaseRepository struct {
-	mu        sync.RWMutex        // 用于并发安全的互斥锁
 	dimension int                 // 向量维度
 	distType  DistanceType        // 距离计算类型
 	idToDoc   map[string]int      // 文档ID到索引的映射
@@ -421,7 +420,7 @@ func DistanceToScore(distance float32, distType DistanceType) float32 {
 // 优化：增加更多有效性检查
 func ValidateVector(vector []float32, expectedDim int) error {
 	// 检查向量是否为空
-	if vector == nil || len(vector) == 0 {
+	if len(vector) == 0 {
 		return ErrEmptyVector
 	}
 

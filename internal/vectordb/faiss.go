@@ -602,6 +602,11 @@ func (r *FaissRepository) Close() error {
 	return nil
 }
 
+// GetDimension 返回向量维数
+func (r *FaissRepository) GetDimension() int {
+	return r.dimension
+}
+
 // saveIndex 保存索引和文档数据到文件
 func (r *FaissRepository) saveIndex() error {
 	// 如果没有指定索引路径，不执行保存

@@ -600,6 +600,11 @@ func (r *MemoryRepository) Close() error {
 	return nil
 }
 
+// GetDimension 返回向量维数
+func (r *MemoryRepository) GetDimension() int {
+	return r.dimension
+}
+
 // 在包初始化时注册内存仓库
 func init() {
 	RegisterRepository("memory", NewMemoryRepository)

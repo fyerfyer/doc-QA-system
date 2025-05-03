@@ -56,6 +56,12 @@ func (m *DocumentStatusManager) MarkAsUploaded(ctx context.Context, docID string
 		Progress:   0,
 	}
 
+	m.logger.WithFields(logrus.Fields{
+		"doc_id":   docID,
+		"filename": fileName,
+		"tags":     doc.Tags,
+	}).Debug("Creating document record with tags")
+
 	// 保存到仓储
 	return m.repo.Create(doc)
 }
