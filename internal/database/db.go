@@ -21,7 +21,7 @@ var (
 	log  *logrus.Logger
 )
 
-// InitLogger sets the logger for database operations
+// InitLogger 初始化日志记录器
 func InitLogger(logger *logrus.Logger) {
 	log = logger
 	if log == nil {
@@ -62,10 +62,10 @@ func Setup(cfg *Config, logger *logrus.Logger) error {
 	return err
 }
 
-// MustDB returns the database connection, initializing it with default config if not already initialized
+// MustDB 获取数据库连接，如果未初始化则使用默认配置初始化
 func MustDB() *gorm.DB {
 	if DB == nil {
-		// Initialize with default configuration if not already set
+		// 使用默认配置初始化数据库连接
 		err := Setup(DefaultConfig(), log)
 		if err != nil {
 			panic(fmt.Sprintf("failed to initialize database connection: %v", err))
@@ -74,7 +74,7 @@ func MustDB() *gorm.DB {
 	return DB
 }
 
-// setupDB is the actual implementation of database setup
+// setupDB 初始化数据库连接
 func setupDB(cfg *Config) error {
 	var err error
 	var dialector gorm.Dialector
@@ -152,6 +152,8 @@ func autoMigrate() error {
 	return DB.AutoMigrate(
 		&models.Document{},
 		&models.DocumentSegment{},
+		&models.ChatSession{}, // 添加聊天会话模型
+		&models.ChatMessage{}, // 添加聊天消息模型
 	)
 }
 

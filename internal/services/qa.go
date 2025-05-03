@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/fyerfyer/doc-QA-system/internal/models"
+	"github.com/fyerfyer/doc-QA-system/internal/repository"
 	"strings"
 	"time"
 
@@ -597,12 +599,41 @@ func (s *QAService) AnswerWithMetadata(ctx context.Context, question string, met
 	return ragResponse.Answer, sources, nil
 }
 
-// GetRecentQuestions 获取最近的问题（假设在另一个存储中保存了问题历史）
+// GetRecentQuestions 获取最近的问题（从聊天历史中获取）
 func (s *QAService) GetRecentQuestions(ctx context.Context, limit int) ([]string, error) {
-	// TODO: 实现获取历史问题的功能
-	// 这需要一个专门记录用户问题历史的组件
-	// MVP版本先返回空列表
-	return []string{}, nil
+	// 检查参数有效性
+	if limit <= 0 {
+		limit = 10 // 默认获取10个问题
+	}
+
+	// 使用ChatRepository获取最近的消息
+	chatRepo := repository.NewChatRepository()
+	messages, err := chatRepo.GetRecentMessages(limit * 2) // 获取更多消息，因为不是所有消息都是问题
+	if err != nil {
+		return nil, fmt.Errorf("failed to get recent messages: %w", err)
+	}
+
+	// 提取用户问题
+	var questions []string
+	uniqueQuestions := make(map[string]bool) // 用于去重
+
+	for _, msg := range messages {
+		// 只处理用户角色的消息(问题)
+		if msg.Role == models.RoleUser {
+			question := strings.TrimSpace(msg.Content)
+			if question != "" && !uniqueQuestions[question] {
+				questions = append(questions, question)
+				uniqueQuestions[question] = true
+
+				// 当收集到足够数量的问题时退出
+				if len(questions) >= limit {
+					break
+				}
+			}
+		}
+	}
+
+	return questions, nil
 }
 
 // ClearCache 清除问答缓存

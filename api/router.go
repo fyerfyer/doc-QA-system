@@ -3,6 +3,8 @@ package api
 import (
 	"github.com/fyerfyer/doc-QA-system/api/handler"
 	"github.com/fyerfyer/doc-QA-system/api/middleware"
+	"github.com/fyerfyer/doc-QA-system/internal/repository"
+	"github.com/fyerfyer/doc-QA-system/internal/services"
 	"github.com/gin-gonic/gin"
 )
 
@@ -24,6 +26,11 @@ func SetupRouter(
 	if gin.Mode() == gin.DebugMode {
 		router.Use(middleware.RequestLogger())
 	}
+
+	// 创建聊天处理器
+	chatRepo := repository.NewChatRepository()
+	chatService := services.NewChatService(chatRepo)
+	chatHandler := handler.NewChatHandler(chatService, qaHandler.GetQAService())
 
 	// 创建API分组
 	api := router.Group("/api")
@@ -50,6 +57,34 @@ func SetupRouter(
 			// 回答问题 - POST /api/qa
 			qaGroup.POST("", qaHandler.AnswerQuestion)
 		}
+
+		// 聊天API
+		chatGroup := api.Group("/chats")
+		{
+			// 创建聊天会话 - POST /api/chats
+			chatGroup.POST("", chatHandler.CreateChat)
+
+			// 获取聊天会话列表 - GET /api/chats
+			chatGroup.GET("", chatHandler.ListChats)
+
+			// 创建聊天并添加消息 - POST /api/chats/with-message
+			chatGroup.POST("/with-message", chatHandler.CreateChatWithMessage)
+
+			// 添加消息 - POST /api/chats/messages
+			chatGroup.POST("/messages", chatHandler.AddMessage)
+
+			// 获取会话历史 - GET /api/chats/:session_id
+			chatGroup.GET("/:session_id", chatHandler.GetChatHistory)
+
+			// 更新聊天会话标题 - PATCH /api/chats/:session_id
+			chatGroup.PATCH("/:session_id", chatHandler.RenameChat)
+
+			// 删除聊天会话 - DELETE /api/chats/:session_id
+			chatGroup.DELETE("/:session_id", chatHandler.DeleteChat)
+		}
+
+		// 最近问题API
+		api.GET("/recent-questions", chatHandler.GetRecentQuestions)
 
 		// 健康检查API
 		api.GET("/health", func(c *gin.Context) {

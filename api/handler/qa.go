@@ -68,16 +68,16 @@ func (h *QAHandler) AnswerQuestion(c *gin.Context) {
 
 		var sourceDocs []vectordb.Document
 		answer, sourceDocs, err = h.qaService.AnswerWithFile(ctx, req.Question, req.FileID)
-		
+
 		// 添加这行调试日志
 		fmt.Printf("DEBUG: AnswerWithFile returned - err: %v, answer: %s\n", err, answer)
-		
+
 		h.logger.WithFields(logrus.Fields{
-			"error": err,
-			"answer_received": answer != "",
+			"error":             err,
+			"answer_received":   answer != "",
 			"source_docs_count": len(sourceDocs),
 		}).Debug("Response from AnswerWithFile")
-		
+
 		if err == nil {
 			sources = model.ConvertToSourceInfo(sourceDocs)
 		}
@@ -130,4 +130,8 @@ func (h *QAHandler) AnswerQuestion(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, model.NewSuccessResponse(resp))
+}
+
+func (h *QAHandler) GetQAService() *services.QAService {
+	return h.qaService
 }
