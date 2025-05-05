@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router';
 import DocumentsView from '../views/DocumentsView.vue';
 import ChatView from '../views/ChatView.vue';
+import AnalyticsView from '../views/AnalyticsView.vue';
 
 // Define routes
 const routes = [
@@ -27,6 +28,23 @@ const routes = [
             // Allow passing document ID through the route
             documentId: route.query.documentId
         })
+    },
+    {
+        path: '/chat/:sessionId',
+        name: 'chat-session',
+        component: ChatView,
+        meta: {
+            title: 'Q&A Chat'
+        },
+        props: true
+    },
+    {
+        path: '/analytics',
+        name: 'analytics',
+        component: AnalyticsView,
+        meta: {
+            title: 'System Analytics'
+        }
     },
     {
         // Catch-all route for 404

@@ -95,6 +95,139 @@ const documentService = {
         // Modify this according to your actual API design
         const baseUrl = process.env.VUE_APP_API_URL || '/api';
         return `${baseUrl}/documents/${fileId}/download`;
+    },
+
+    /**
+     * Get document metrics by status
+     * @returns {Promise<Object>} Document counts by status
+     */
+    getDocumentMetrics() {
+        return api.get('/documents/metrics');
+    },
+
+    /**
+     * Get document statistics
+     * @returns {Promise<Object>} Statistical information about documents
+     */
+    async getDocumentStatistics() {
+        // Get all documents first - we'll calculate stats client-side
+        const response = await this.listDocuments({ page_size: 100 });
+        const documents = response.documents || [];
+
+        if (documents.length === 0) {
+            return {
+                totalCount: 0,
+                totalSize: 0,
+                averageSize: 0,
+                totalSegments: 0,
+                averageSegments: 0,
+                processingTimes: {
+                    min: 0,
+                    max: 0,
+                    average: 0
+                },
+                statusCounts: {
+                    uploaded: 0,
+                    processing: 0,
+                    completed: 0,
+                    failed: 0
+                }
+            };
+        }
+
+        // Calculate statistics
+        let totalSize = 0;
+        let totalSegments = 0;
+        let processingTimes = [];
+        const statusCounts = {
+            uploaded: 0,
+            processing: 0,
+            completed: 0,
+            failed: 0
+        };
+
+        documents.forEach(doc => {
+            // Count by status
+            statusCounts[doc.status] = (statusCounts[doc.status] || 0) + 1;
+
+            // Sum sizes
+            if (doc.size) {
+                totalSize += doc.size;
+            }
+
+            // Sum segments
+            if (doc.segments) {
+                totalSegments += doc.segments;
+            }
+
+            // Calculate processing time for completed documents
+            if (doc.status === 'completed' && doc.upload_time) {
+                const uploadTime = new Date(doc.upload_time);
+                const processedTime = doc.updated_at ? new Date(doc.updated_at) : new Date();
+                const processTime = (processedTime - uploadTime) / 1000; // in seconds
+                processingTimes.push(processTime);
+            }
+        });
+
+        // Calculate averages
+        const totalCount = documents.length;
+        const averageSize = totalCount > 0 ? totalSize / totalCount : 0;
+        const averageSegments = totalCount > 0 ? totalSegments / totalCount : 0;
+
+        // Calculate processing time stats
+        let minProcessingTime = 0;
+        let maxProcessingTime = 0;
+        let averageProcessingTime = 0;
+
+        if (processingTimes.length > 0) {
+            minProcessingTime = Math.min(...processingTimes);
+            maxProcessingTime = Math.max(...processingTimes);
+            averageProcessingTime = processingTimes.reduce((a, b) => a + b, 0) / processingTimes.length;
+        }
+
+        return {
+            totalCount,
+            totalSize,
+            averageSize,
+            totalSegments,
+            averageSegments,
+            processingTimes: {
+                min: minProcessingTime,
+                max: maxProcessingTime,
+                average: averageProcessingTime
+            },
+            statusCounts
+        };
+    },
+
+    /**
+     * Get document processing status distribution
+     * @returns {Promise<Array>} Data formatted for charts
+     */
+    async getStatusDistribution() {
+        const metrics = await this.getDocumentMetrics();
+
+        return [
+            { name: 'Uploaded', value: metrics.uploaded || 0 },
+            { name: 'Processing', value: metrics.processing || 0 },
+            { name: 'Completed', value: metrics.completed || 0 },
+            { name: 'Failed', value: metrics.failed || 0 }
+        ];
+    },
+
+    /**
+     * Format file size for display
+     * @param {number} bytes - File size in bytes
+     * @returns {string} Formatted file size
+     */
+    formatFileSize(bytes) {
+        if (bytes === 0) return '0 Bytes';
+
+        const k = 1024;
+        const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
     }
 };
 

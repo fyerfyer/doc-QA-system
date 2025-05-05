@@ -6,6 +6,7 @@
       <nav class="app-nav">
         <router-link to="/documents" class="nav-item">Documents</router-link>
         <router-link to="/chat" class="nav-item">Q&A Chat</router-link>
+        <router-link to="/analytics" class="nav-item">Analytics</router-link>
       </nav>
     </header>
 

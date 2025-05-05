@@ -54,4 +54,61 @@ api.interceptors.response.use(
     }
 );
 
+// Chat API endpoints
+api.chat = {
+    // Create a new chat session
+    createChat: (title) => {
+        return api.post('/chats', { title });
+    },
+
+    // Get chat history for a specific session
+    getChatHistory: (sessionId, page = 1, pageSize = 50) => {
+        return api.get(`/chats/${sessionId}`, { params: { page, page_size: pageSize } });
+    },
+
+    // List all chat sessions
+    listChats: (page = 1, pageSize = 10, filters = {}) => {
+        return api.get('/chats', {
+            params: {
+                page,
+                page_size: pageSize,
+                ...filters
+            }
+        });
+    },
+
+    // Add a message to a chat session
+    addMessage: (sessionId, role, content, metadata = {}) => {
+        return api.post('/chats/messages', {
+            session_id: sessionId,
+            role,
+            content,
+            metadata
+        });
+    },
+
+    // Delete a chat session
+    deleteChat: (sessionId) => {
+        return api.delete(`/chats/${sessionId}`);
+    },
+
+    // Rename a chat session
+    renameChat: (sessionId, title) => {
+        return api.patch(`/chats/${sessionId}`, { title });
+    },
+
+    // Get recent questions
+    getRecentQuestions: (limit = 10) => {
+        return api.get('/recent-questions', { params: { limit } });
+    },
+
+    // Create a chat session with an initial message
+    createChatWithMessage: (content, title = '') => {
+        return api.post('/chats/with-message', {
+            content,
+            title
+        });
+    }
+};
+
 export default api;
