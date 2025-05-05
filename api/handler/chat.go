@@ -405,10 +405,12 @@ func (h *ChatHandler) DeleteChat(c *gin.Context) {
 // RenameChat 重命名聊天会话
 // PATCH /api/chats/:session_id
 func (h *ChatHandler) RenameChat(c *gin.Context) {
-	// 绑定路径参数
-	var pathParams model.RenameChatRequest
+	// 1. 首先只绑定URI参数
+	var pathParams struct {
+		SessionID string `uri:"session_id" binding:"required"`
+	}
 	if err := c.ShouldBindUri(&pathParams); err != nil {
-		h.logger.WithError(err).Warn("Invalid rename chat request")
+		h.logger.WithError(err).Warn("Invalid chat session ID")
 		c.JSON(http.StatusBadRequest, model.NewErrorResponse(
 			http.StatusBadRequest,
 			"无效的会话ID",
@@ -416,10 +418,12 @@ func (h *ChatHandler) RenameChat(c *gin.Context) {
 		return
 	}
 
-	// 绑定请求体
-	var req model.RenameChatRequest
+	// 2. 然后再绑定JSON请求体
+	var req struct {
+		Title string `json:"title" binding:"required"`
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		h.logger.WithError(err).Warn("Invalid rename chat request body")
+		h.logger.WithError(err).Warn("Invalid rename request body")
 		c.JSON(http.StatusBadRequest, model.NewErrorResponse(
 			http.StatusBadRequest,
 			"无效的请求参数",
@@ -427,14 +431,11 @@ func (h *ChatHandler) RenameChat(c *gin.Context) {
 		return
 	}
 
-	// 确保路径参数和请求体中的会话ID一致
-	req.SessionID = pathParams.SessionID
-
-	// 重命名会话
-	if err := h.chatService.RenameChatSession(c.Request.Context(), req.SessionID, req.Title); err != nil {
+	// 3. 重命名会话
+	if err := h.chatService.RenameChatSession(c.Request.Context(), pathParams.SessionID, req.Title); err != nil {
 		h.logger.WithError(err).
 			WithFields(logrus.Fields{
-				"session_id": req.SessionID,
+				"session_id": pathParams.SessionID,
 				"new_title":  req.Title,
 			}).
 			Error("Failed to rename chat session")
@@ -446,12 +447,12 @@ func (h *ChatHandler) RenameChat(c *gin.Context) {
 	}
 
 	// 获取更新后的会话
-	session, err := h.chatService.GetChatSession(c.Request.Context(), req.SessionID)
+	session, err := h.chatService.GetChatSession(c.Request.Context(), pathParams.SessionID)
 	if err != nil {
-		h.logger.WithError(err).WithField("session_id", req.SessionID).Error("Failed to get renamed chat session")
+		h.logger.WithError(err).WithField("session_id", pathParams.SessionID).Error("Failed to get renamed chat session")
 		c.JSON(http.StatusOK, model.NewSuccessResponse(map[string]interface{}{
 			"success":   true,
-			"sessionId": req.SessionID,
+			"sessionId": pathParams.SessionID,
 			"title":     req.Title,
 		}))
 		return

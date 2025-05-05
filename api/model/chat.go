@@ -20,15 +20,15 @@ type CreateMessageRequest struct {
 // GetChatHistoryRequest 获取聊天历史请求
 type GetChatHistoryRequest struct {
 	SessionID         string `uri:"session_id" binding:"required"` // 会话ID
-	PaginationRequest                                              // 嵌入分页请求
+	PaginationRequest        // 嵌入分页请求
 }
 
 // ChatListRequest 聊天会话列表请求
 type ChatListRequest struct {
 	PaginationRequest            // 嵌入分页请求
 	StartTime         *time.Time `form:"start_time" json:"start_time,omitempty"` // 开始时间
-	EndTime           *time.Time `form:"end_time" json:"end_time,omitempty"` // 结束时间
-	Tags              string     `form:"tags" json:"tags,omitempty"` // 标签过滤
+	EndTime           *time.Time `form:"end_time" json:"end_time,omitempty"`     // 结束时间
+	Tags              string     `form:"tags" json:"tags,omitempty"`             // 标签过滤
 }
 
 // RenameChatRequest 重命名聊天会话请求

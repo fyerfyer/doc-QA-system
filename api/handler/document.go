@@ -119,7 +119,7 @@ func (h *DocumentHandler) UploadDocument(c *gin.Context) {
 	if err := h.documentService.Init(); err == nil {
 		docStatusManager := h.documentService.GetStatusManager()
 		if docStatusManager != nil {
-			// Pass the tags from the request to MarkAsUploaded
+			// 将请求中的标签传入MarkAsUploaded
 			err := docStatusManager.MarkAsUploaded(ctx, fileInfo.ID, filename, fileInfo.Path, fileInfo.Size)
 			if err != nil {
 				h.logger.WithError(err).Warn("Failed to mark document as uploaded")
