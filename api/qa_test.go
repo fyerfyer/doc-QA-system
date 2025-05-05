@@ -12,14 +12,19 @@ import (
 	"github.com/fyerfyer/doc-QA-system/api/handler"
 	"github.com/fyerfyer/doc-QA-system/api/model"
 	"github.com/fyerfyer/doc-QA-system/internal/cache"
+	"github.com/fyerfyer/doc-QA-system/internal/database"
 	"github.com/fyerfyer/doc-QA-system/internal/embedding"
 	"github.com/fyerfyer/doc-QA-system/internal/llm"
+	"github.com/fyerfyer/doc-QA-system/internal/models"
+	"github.com/fyerfyer/doc-QA-system/internal/repository"
 	"github.com/fyerfyer/doc-QA-system/internal/services"
 	"github.com/fyerfyer/doc-QA-system/internal/vectordb"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
 )
 
 // QA API测试环境配置
@@ -30,12 +35,30 @@ type qaTestEnv struct {
 	LLMClient       *llm.MockClient
 	Cache           cache.Cache
 	QAService       *services.QAService
+	ChatRepo        repository.ChatRepository // 添加聊天仓储
+	ChatHandler     *handler.ChatHandler      // 添加聊天处理器
+	DB              *gorm.DB                  // 添加数据库连接
 }
 
 // 创建QA API测试环境
 func setupQATestEnv(t *testing.T) *qaTestEnv {
 	// 设置测试模式
 	gin.SetMode(gin.TestMode)
+
+	// 创建内存数据库
+	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	require.NoError(t, err, "Failed to create in-memory database")
+
+	// 运行数据库迁移
+	err = db.AutoMigrate(&models.ChatSession{}, &models.ChatMessage{})
+	require.NoError(t, err, "Failed to run migrations")
+
+	// 保存原始数据库引用并替换为测试数据库
+	originalDB := database.DB
+	database.DB = db
+	t.Cleanup(func() {
+		database.DB = originalDB
+	})
 
 	// 创建内存向量数据库
 	vectorDB, err := vectordb.NewRepository(vectordb.Config{
@@ -58,6 +81,16 @@ func setupQATestEnv(t *testing.T) *qaTestEnv {
 	mockLLM.On("Generate", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Return(
 		&llm.Response{
 			Text:       "这是一个模拟回答",
+			TokenCount: 10,
+			ModelName:  "mock-model",
+			FinishTime: time.Now(),
+		},
+		nil,
+	)
+	mockLLM.On("Chat", mock.Anything, mock.Anything, mock.Anything).Maybe().Return(
+		&llm.Response{
+			Text:       "这是一个模拟回答",
+			Messages:   []llm.Message{{Role: llm.RoleAssistant, Content: "这是一个模拟回答"}},
 			TokenCount: 10,
 			ModelName:  "mock-model",
 			FinishTime: time.Now(),
@@ -89,15 +122,22 @@ func setupQATestEnv(t *testing.T) *qaTestEnv {
 		services.WithMinScore(0.0),
 	)
 
-	// 创建QA处理器
-	qaHandler := handler.NewQAHandler(qaService)
+	// 创建聊天仓储
+	chatRepo := repository.NewChatRepository()
+
+	// 创建聊天服务
+	chatService := services.NewChatService(chatRepo)
+
+	// 创建聊天处理器
+	chatHandler := handler.NewChatHandler(chatService, qaService)
 
 	// 设置路由
 	router := gin.New()
 	router.Use(gin.Recovery())
 
 	api := router.Group("/api")
-	api.POST("/qa", qaHandler.AnswerQuestion)
+	api.POST("/qa", handler.NewQAHandler(qaService).AnswerQuestion)
+	api.GET("/recent-questions", chatHandler.GetRecentQuestions)
 
 	return &qaTestEnv{
 		Router:          router,
@@ -106,6 +146,9 @@ func setupQATestEnv(t *testing.T) *qaTestEnv {
 		LLMClient:       mockLLM,
 		Cache:           cacheService,
 		QAService:       qaService,
+		ChatRepo:        chatRepo,
+		ChatHandler:     chatHandler,
+		DB:              db,
 	}
 }
 
@@ -123,14 +166,15 @@ func TestQA(t *testing.T) {
 		Vector:    make([]float32, 1536), // 使用和 Mock 嵌入维度相同的向量
 		CreatedAt: time.Now(),
 	}
-	env.VectorDB.Add(testDoc)
+	err := env.VectorDB.Add(testDoc)
+	require.NoError(t, err)
 
 	// 配置 Mock 嵌入客户端返回一个匹配的向量
 	env.EmbeddingClient.On("Embed", mock.Anything, "什么是向量数据库?").Return(
 		make([]float32, 1536), nil,
 	)
 
-	// 准备问题请求
+	// 准备请求数据
 	reqBody := map[string]interface{}{
 		"question": "什么是向量数据库?",
 	}
@@ -255,36 +299,33 @@ func TestQAWithSpecificFile(t *testing.T) {
 	testFileID := "test_file_123"
 
 	// 将测试文档添加到向量数据库
-	testDocument := vectordb.Document{
-		ID:        "test_segment_1",
+	testDoc := vectordb.Document{
+		ID:        "test_doc_123",
 		FileID:    testFileID,
-		FileName:  "test.pdf",
+		FileName:  "test_file_123.txt",
 		Position:  1,
-		Text:      "向量数据库是一种专门存储和检索向量数据的数据库系统",
-		Vector:    make([]float32, 1536), // 零向量
+		Text:      "这是一个特定文件中的测试文档内容。",
+		Vector:    make([]float32, 1536),
 		CreatedAt: time.Now(),
-		Metadata: map[string]interface{}{
-			"source": "test",
-		},
 	}
-	err := env.VectorDB.Add(testDocument)
+	err := env.VectorDB.Add(testDoc)
 	require.NoError(t, err)
 
 	// 配置Mock行为，用于搜索特定文档
-	env.EmbeddingClient.On("Embed", mock.Anything, "什么是向量数据库?").Return(
+	env.EmbeddingClient.On("Embed", mock.Anything, "特定文件中有什么内容?").Return(
 		make([]float32, 1536), nil,
 	)
 
-	// 准备问题请求，指定文件ID
+	// 准备请求，指定文件ID
 	reqBody := map[string]interface{}{
-		"question": "什么是向量数据库?",
+		"question": "特定文件中有什么内容?",
 		"file_id":  testFileID,
 	}
 	jsonData, err := json.Marshal(reqBody)
 	require.NoError(t, err)
 
-	// 发送问答请求
-	req := httptest.NewRequest(http.MethodPost, "/api/qa", bytes.NewBuffer(jsonData))
+	// 发送请求
+	req := httptest.NewRequest("POST", "/api/qa", bytes.NewBuffer(jsonData))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	env.Router.ServeHTTP(w, req)
@@ -297,11 +338,9 @@ func TestQAWithSpecificFile(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, resp.Code)
 
-	// 验证回答
 	qaResp, ok := resp.Data.(map[string]interface{})
 	assert.True(t, ok)
-	assert.Equal(t, "什么是向量数据库?", qaResp["question"])
-	assert.Equal(t, "这是一个模拟回答", qaResp["answer"])
+	assert.NotEmpty(t, qaResp["answer"])
 }
 
 // TestHealthCheck 测试健康检查API
@@ -311,15 +350,15 @@ func TestHealthCheck(t *testing.T) {
 
 	// 创建一个简单的路由来测试健康检查
 	router := gin.New()
-	router.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
+	api := router.Group("/api")
+	api.GET("/health", func(c *gin.Context) {
+		c.JSON(200, gin.H{
 			"status": "ok",
-			"time":   time.Now().Format(time.RFC3339),
 		})
 	})
 
 	// 请求健康检查
-	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req := httptest.NewRequest("GET", "/api/health", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 

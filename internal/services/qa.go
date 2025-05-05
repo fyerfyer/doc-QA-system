@@ -4,10 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/fyerfyer/doc-QA-system/internal/models"
-	"github.com/fyerfyer/doc-QA-system/internal/repository"
 	"strings"
 	"time"
+
+	"github.com/fyerfyer/doc-QA-system/internal/models"
+	"github.com/fyerfyer/doc-QA-system/internal/repository"
 
 	"github.com/fyerfyer/doc-QA-system/internal/cache"
 	"github.com/fyerfyer/doc-QA-system/internal/embedding"
@@ -135,13 +136,16 @@ func (s *QAService) handleGreeting(ctx context.Context, question string) (string
 // Answer 回答问题
 func (s *QAService) Answer(ctx context.Context, question string) (string, []vectordb.Document, error) {
 	if question == "" {
+		fmt.Println("DEBUG: Question is empty")
 		return "", nil, fmt.Errorf("question cannot be empty")
 	}
 
 	// 检查是否是问候语
 	if isGreeting(question) {
+		fmt.Println("DEBUG: Question is a greeting")
 		greeting, err := s.handleGreeting(ctx, question)
 		if err != nil {
+			fmt.Printf("DEBUG: Failed to generate greeting response: %v\n", err)
 			return "", nil, err
 		}
 		return greeting, nil, nil
@@ -151,25 +155,33 @@ func (s *QAService) Answer(ctx context.Context, question string) (string, []vect
 	cacheKey := cache.GenerateCacheKey("qa", question)
 	cachedAnswer, found, err := s.cache.Get(cacheKey)
 	if err == nil && found {
+		fmt.Println("DEBUG: Cache hit for answer")
 		// 从缓存中同时获取相关文档
 		docsCacheKey := cache.GenerateCacheKey("qa_docs", question)
 		docsJson, docsFound, docsErr := s.cache.Get(docsCacheKey)
 
 		var sources []vectordb.Document
 		if docsErr == nil && docsFound {
+			fmt.Println("DEBUG: Cache hit for documents")
 			// 解析缓存的文档列表
 			if err := json.Unmarshal([]byte(docsJson), &sources); err != nil {
-				// 解析失败就使用空列表，不影响主流程
-				fmt.Printf("Failed to unmarshal cached documents: %v\n", err)
+				fmt.Printf("DEBUG: Failed to unmarshal cached documents: %v\n", err)
+			} else {
+				fmt.Printf("DEBUG: Unmarshaled %d cached documents\n", len(sources))
 			}
+		} else {
+			fmt.Println("DEBUG: No cache hit for documents")
 		}
 
 		return cachedAnswer, sources, nil
 	}
 
+	fmt.Println("DEBUG: No cache hit, performing vector search")
+
 	// 2. 将问题转换为向量
 	vector, err := s.embedder.Embed(ctx, question)
 	if err != nil {
+		fmt.Printf("DEBUG: Failed to generate embedding: %v\n", err)
 		return "", nil, fmt.Errorf("failed to generate embedding: %w", err)
 	}
 
@@ -178,19 +190,26 @@ func (s *QAService) Answer(ctx context.Context, question string) (string, []vect
 		MinScore:   s.minScore,
 		MaxResults: s.searchLimit,
 	}
+	fmt.Printf("DEBUG: Searching with filter - MinScore: %f, MaxResults: %d\n", filter.MinScore, filter.MaxResults)
 	results, err := s.vectorDB.Search(vector, filter)
 	if err != nil {
+		fmt.Printf("DEBUG: Search failed: %v\n", err)
 		return "", nil, fmt.Errorf("search failed: %w", err)
 	}
+
+	fmt.Printf("DEBUG: Search returned %d results\n", len(results))
 
 	// 检查是否有高相关度的文档
 	hasRelevantDocs := false
 	for _, result := range results {
+		fmt.Printf("DEBUG: Document score: %f, minScore: %f\n", result.Score, s.minScore)
 		if result.Score >= s.minScore {
 			hasRelevantDocs = true
 			break
 		}
 	}
+
+	fmt.Printf("DEBUG: hasRelevantDocs: %v\n", hasRelevantDocs)
 
 	// 如果没有找到高相关度文档，但有一些相关文档，仍使用它们
 	if !hasRelevantDocs && len(results) > 0 {
