@@ -173,7 +173,6 @@ export default {
       if (!date) return 'N/A';
 
       const now = new Date();
-      const diff = now - date;
 
       // If it's today, show "Today, HH:MM"
       if (date.toDateString() === now.toDateString()) {

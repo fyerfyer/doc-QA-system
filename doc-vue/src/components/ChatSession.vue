@@ -2,7 +2,8 @@
   <div
     class="chat-session"
     :class="{ 'chat-session--active': isActive }"
-    @click="handleSelect"
+    @click="handleSelect">
+    <div class="chat-session__content">
       <!-- Chat Title -->
       <div class="chat-session__title" :title="chat.title">
         {{ chat.title }}

@@ -249,14 +249,12 @@ export default {
 
     async handleAnswerReceived(answerData) {
       try {
-        let response;
-
         if (!this.currentSessionId) {
           // Create a new chat session
-          response = await this.createNewChat(answerData.question);
+          await this.createNewChat(answerData.question);
         } else {
           // Send to existing chat session
-          response = await this.sendMessageToCurrentSession(answerData.question);
+          await this.sendMessageToCurrentSession(answerData.question);
         }
 
         // Scroll to bottom after the DOM update
