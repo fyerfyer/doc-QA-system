@@ -12,7 +12,7 @@
       <!-- Chat Metadata -->
       <div class="chat-session__meta">
         <span class="chat-session__date">{{ formattedDate }}</span>
-        <span class="chat-session__count">{{ chat.messageCount }} {{ chat.messageCount === 1 ? 'message' : 'messages' }}</span>
+        <span class="chat-session__count">{{ chat.message_count || 0 }} messages</span>
       </div>
     </div>
 
@@ -107,20 +107,19 @@ export default {
   },
   computed: {
     formattedDate() {
-      // Return today, yesterday, or formatted date
-      const date = this.chat.updatedAt ? new Date(this.chat.updatedAt) : new Date(this.chat.createdAt);
-
-      const today = new Date();
-      const yesterday = new Date();
-      yesterday.setDate(yesterday.getDate() - 1);
-
-      if (date.toDateString() === today.toDateString()) {
-        return 'Today, ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      } else if (date.toDateString() === yesterday.toDateString()) {
-        return 'Yesterday, ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      } else {
-        return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+      // Add proper validation for date
+      if (!this.chat || !this.chat.updated_at) {
+        return 'No date available';
       }
+      
+      // Ensure the date is valid
+      const date = new Date(this.chat.updated_at);
+      if (isNaN(date.getTime())) {
+        return 'No date available';
+      }
+      
+      // Format the date
+      return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
     }
   },
   methods: {

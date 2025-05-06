@@ -1,12 +1,12 @@
 <template>
   <div v-if="answer" class="answer-display">
     <div class="answer-display__question">
-      <h3 class="answer-display__question-title">Question:</h3>
+      <h3 class="answer-display__question-title">Question</h3>
       <p class="answer-display__question-text">{{ answer.question }}</p>
     </div>
 
     <div class="answer-display__content">
-      <h3 class="answer-display__answer-title">Answer:</h3>
+      <h3 class="answer-display__answer-title">Answer</h3>
       <div class="answer-display__answer-text" v-html="formattedAnswer"></div>
     </div>
 

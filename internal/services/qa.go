@@ -50,7 +50,7 @@ func NewQAService(
 		cache:       cache,
 		cacheTTL:    24 * time.Hour, // 默认缓存24小时
 		searchLimit: 5,              // 默认检索5个相关文档
-		minScore:    0.7,            // 默认最低相似度分数
+		minScore:    0.5,            // 默认最低相似度分数
 	}
 
 	// 应用配置选项
@@ -136,16 +136,16 @@ func (s *QAService) handleGreeting(ctx context.Context, question string) (string
 // Answer 回答问题
 func (s *QAService) Answer(ctx context.Context, question string) (string, []vectordb.Document, error) {
 	if question == "" {
-		fmt.Println("DEBUG: Question is empty")
+		//fmt.Println("DEBUG: Question is empty")
 		return "", nil, fmt.Errorf("question cannot be empty")
 	}
 
 	// 检查是否是问候语
 	if isGreeting(question) {
-		fmt.Println("DEBUG: Question is a greeting")
+		//fmt.Println("DEBUG: Question is a greeting")
 		greeting, err := s.handleGreeting(ctx, question)
 		if err != nil {
-			fmt.Printf("DEBUG: Failed to generate greeting response: %v\n", err)
+			//fmt.Printf("DEBUG: Failed to generate greeting response: %v\n", err)
 			return "", nil, err
 		}
 		return greeting, nil, nil
@@ -162,26 +162,26 @@ func (s *QAService) Answer(ctx context.Context, question string) (string, []vect
 
 		var sources []vectordb.Document
 		if docsErr == nil && docsFound {
-			fmt.Println("DEBUG: Cache hit for documents")
+			//fmt.Println("DEBUG: Cache hit for documents")
 			// 解析缓存的文档列表
 			if err := json.Unmarshal([]byte(docsJson), &sources); err != nil {
-				fmt.Printf("DEBUG: Failed to unmarshal cached documents: %v\n", err)
+				//fmt.Printf("DEBUG: Failed to unmarshal cached documents: %v\n", err)
 			} else {
-				fmt.Printf("DEBUG: Unmarshaled %d cached documents\n", len(sources))
+				//fmt.Printf("DEBUG: Unmarshaled %d cached documents\n", len(sources))
 			}
 		} else {
-			fmt.Println("DEBUG: No cache hit for documents")
+			//fmt.Println("DEBUG: No cache hit for documents")
 		}
 
 		return cachedAnswer, sources, nil
 	}
 
-	fmt.Println("DEBUG: No cache hit, performing vector search")
+	//fmt.Println("DEBUG: No cache hit, performing vector search")
 
 	// 2. 将问题转换为向量
 	vector, err := s.embedder.Embed(ctx, question)
 	if err != nil {
-		fmt.Printf("DEBUG: Failed to generate embedding: %v\n", err)
+		//fmt.Printf("DEBUG: Failed to generate embedding: %v\n", err)
 		return "", nil, fmt.Errorf("failed to generate embedding: %w", err)
 	}
 
@@ -190,14 +190,14 @@ func (s *QAService) Answer(ctx context.Context, question string) (string, []vect
 		MinScore:   s.minScore,
 		MaxResults: s.searchLimit,
 	}
-	fmt.Printf("DEBUG: Searching with filter - MinScore: %f, MaxResults: %d\n", filter.MinScore, filter.MaxResults)
+	//fmt.Printf("DEBUG: Searching with filter - MinScore: %f, MaxResults: %d\n", filter.MinScore, filter.MaxResults)
 	results, err := s.vectorDB.Search(vector, filter)
 	if err != nil {
-		fmt.Printf("DEBUG: Search failed: %v\n", err)
+		//fmt.Printf("DEBUG: Search failed: %v\n", err)
 		return "", nil, fmt.Errorf("search failed: %w", err)
 	}
 
-	fmt.Printf("DEBUG: Search returned %d results\n", len(results))
+	//fmt.Printf("DEBUG: Search returned %d results\n", len(results))
 
 	// 检查是否有高相关度的文档
 	hasRelevantDocs := false
@@ -209,69 +209,24 @@ func (s *QAService) Answer(ctx context.Context, question string) (string, []vect
 		}
 	}
 
-	fmt.Printf("DEBUG: hasRelevantDocs: %v\n", hasRelevantDocs)
-
-	// 如果没有找到高相关度文档，但有一些相关文档，仍使用它们
-	if !hasRelevantDocs && len(results) > 0 {
-		// 如果有低相关度文档，使用前几个最相关的
-		filteredResults := results
-		if len(results) > 3 {
-			filteredResults = results[:3] // 取前3个最相关文档
-		}
-
-		contexts := make([]string, len(filteredResults))
-		sources := make([]vectordb.Document, len(filteredResults))
-		for i, result := range filteredResults {
-			contexts[i] = result.Document.Text
-			sources[i] = result.Document
-		}
-
-		// 使用特殊的低置信度提示词
-		lowConfidencePrompt := "用户提问：" + question +
-			"\n\n我找到了一些可能相关但置信度不高的信息，请尝试根据这些信息回答用户问题，如果信息不足，可以说明这一点。"
-
-		for i, ctx := range contexts {
-			lowConfidencePrompt += fmt.Sprintf("\n\n参考信息[%d]: %s", i+1, ctx)
-		}
-
-		response, err := s.llm.Generate(
-			ctx,
-			lowConfidencePrompt,
-			llm.WithGenerateMaxTokens(1024),
-			llm.WithGenerateTemperature(0.7),
-		)
-
-		if err != nil {
-			return "", nil, fmt.Errorf("failed to generate low confidence answer: %w", err)
-		}
-
-		// 缓存结果
-		s.cache.Set(cacheKey, response.Text, s.cacheTTL)
-
-		return response.Text, sources, nil
-	}
+	//fmt.Printf("DEBUG: hasRelevantDocs: %v\n", hasRelevantDocs)
 
 	// 如果没有找到高相关度文档，直接用LLM回答
 	if len(results) == 0 || !hasRelevantDocs {
 		// 构建一个通用知识问答提示词
-		generalPrompt := "请回答用户的问题：" + question +
-			"\n\n如果您不知道答案，请直接说\"抱歉，我没有足够信息回答这个问题。\"不要编造信息。"
+		prompt := fmt.Sprintf("请基于你的已有知识，回答下面的问题： %s\n如果你不知道问题的答案，回答\"不知道\"", question)
 
-		genResponse, err := s.llm.Generate(
-			ctx,
-			generalPrompt,
-			llm.WithGenerateMaxTokens(1024),
-			llm.WithGenerateTemperature(0.7),
-		)
+		// 获取LLM的回答
+		response, err := s.llm.Generate(ctx, prompt,
+			llm.WithGenerateMaxTokens(1000),
+			llm.WithGenerateTemperature(0.7))
 
 		if err != nil {
-			return "", nil, fmt.Errorf("failed to generate general answer: %w", err)
+			return "", nil, err
 		}
 
-		// 缓存此结果
-		s.cache.Set(cacheKey, genResponse.Text, s.cacheTTL)
-
-		return genResponse.Text, nil, nil
+		// 返回答案，不包含来源，因为使用的是LLM的通用知识
+		return response.Text, []vectordb.Document{}, nil
 	}
 
 	// 4. 提取相关文本内容，只保留相关度高于阈值的文档
@@ -326,7 +281,7 @@ func (s *QAService) AnswerWithFile(ctx context.Context, question string, fileID 
 		return "", nil, fmt.Errorf("file ID cannot be empty")
 	}
 
-	fmt.Printf("DEBUG: AnswerWithFile - checking if file exists: %s\n", fileID)
+	//fmt.Printf("DEBUG: AnswerWithFile - checking if file exists: %s\n", fileID)
 
 	// 验证文件是否存在的逻辑
 	filter := vectordb.SearchFilter{
@@ -400,25 +355,20 @@ func (s *QAService) AnswerWithFile(ctx context.Context, question string, fileID 
 
 	// 如果没有找到高相关度文档，使用LLM直接回答
 	if len(results) == 0 || !hasRelevantDocs {
-		// 构建一个特定文件问答提示词，但指出在该文件中没找到信息
-		filePrompt := "用户正在询问关于特定文件的问题：" + question +
-			"\n\n请告诉用户您在这个特定文件中没有找到相关信息，但可以尝试回答他们的一般性问题。"
+		// 构建一个通用知识问答提示词
+		prompt := fmt.Sprintf("请基于你的已有知识，回答下面的问题： %s\n如果你不知道问题的答案，回答\"不知道\"", question)
 
-		fileResponse, err := s.llm.Generate(
-			ctx,
-			filePrompt,
-			llm.WithGenerateMaxTokens(512),
-			llm.WithGenerateTemperature(0.7),
-		)
+		// 获取LLM的回答
+		response, err := s.llm.Generate(ctx, prompt,
+			llm.WithGenerateMaxTokens(1000),
+			llm.WithGenerateTemperature(0.7))
 
 		if err != nil {
-			return "", nil, fmt.Errorf("failed to generate file-specific answer: %w", err)
+			return "", nil, err
 		}
 
-		// 缓存此结果
-		s.cache.Set(cacheKey, fileResponse.Text, s.cacheTTL)
-
-		return fileResponse.Text, nil, nil
+		// 返回答案，不包含来源，因为使用的是LLM的通用知识
+		return response.Text, []vectordb.Document{}, nil
 	}
 
 	// 提取相关文本内容，只保留相关度高于阈值的文档

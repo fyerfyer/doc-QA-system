@@ -49,6 +49,9 @@ func SetupRouter(
 
 			// 删除文档 - DELETE /api/documents/:id
 			docGroup.DELETE("/:id", docHandler.DeleteDocument)
+
+			// 获取文档指标 - GET /api/documents/metrics
+			docGroup.GET("/metrics", docHandler.GetDocumentMetrics)
 		}
 
 		// 问答API
