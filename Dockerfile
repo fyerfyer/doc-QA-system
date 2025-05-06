@@ -44,13 +44,14 @@ COPY . .
 # 构建应用
 RUN CGO_ENABLED=1 GOOS=linux go build -o docqa ./cmd/main.go
 
-FROM debian:bullseye-slim
+FROM debian:bookworm-slim
 
-# 安装运行时依赖
+# 安装运行时依赖 - 将 libopenblas-base 改为 libopenblas0
 RUN apt-get update && apt-get install -y \
     libgomp1 \
-    libopenblas-base \
+    libopenblas0 \
     ca-certificates \
+    libstdc++6 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -64,7 +65,7 @@ WORKDIR /app
 COPY --from=builder /app/docqa .
 
 # 创建必要目录
-RUN mkdir -p /app/data/files /app/data/vectordb
+RUN mkdir -p /app/data/files /app/data/vectordb /app/logs
 
 ENV GIN_MODE=release
 
