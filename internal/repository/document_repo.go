@@ -75,8 +75,24 @@ func (r *docRepository) List(offset, limit int, filters map[string]interface{}) 
 	// 应用筛选条件
 	if filters != nil {
 		// 状态过滤
-		if status, ok := filters["status"].(string); ok && status != "" {
-			query = query.Where("status = ?", status)
+		if status, ok := filters["status"]; ok {
+			// 处理不同类型的status
+			switch s := status.(type) {
+			case models.DocumentStatus:
+				// 如果是DocumentStatus类型，转换为string
+				query = query.Where("status = ?", string(s))
+			case string:
+				// 如果已经是string，直接使用
+				if s != "" {
+					query = query.Where("status = ?", s)
+				}
+			default:
+				// 其他类型，尝试转换为string
+				statusStr := fmt.Sprintf("%v", status)
+				if statusStr != "" {
+					query = query.Where("status = ?", statusStr)
+				}
+			}
 		}
 
 		// 标签过滤

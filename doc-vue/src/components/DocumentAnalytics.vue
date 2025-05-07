@@ -99,7 +99,7 @@
 <script>
 import documentService from '@/services/documentService';
 import * as echarts from 'echarts/core';
-import { BarChart } from 'echarts/charts';
+import { PieChart } from 'echarts/charts';
 import {
   GridComponent,
   TooltipComponent,
@@ -110,7 +110,7 @@ import { CanvasRenderer } from 'echarts/renderers';
 
 // Register the required components
 echarts.use([
-  BarChart,
+  PieChart,  // 改为PieChart
   GridComponent,
   TooltipComponent,
   TitleComponent,
@@ -191,7 +191,6 @@ export default {
 
     initChart() {
       if (!this.hasDocuments) return;
-
       if (!this.$refs.chartContainer) return;
 
       if (this.chart) {
@@ -200,44 +199,65 @@ export default {
 
       this.chart = echarts.init(this.$refs.chartContainer);
 
+      const colorMap = {
+        'Uploaded': '#909399',
+        'Processing': '#409EFF',
+        'Completed': '#67C23A',
+        'Failed': '#F56C6C'
+      };
+
       const option = {
         tooltip: {
           trigger: 'item',
           formatter: '{b}: {c} ({d}%)'
         },
         legend: {
-          orient: 'vertical',
-          left: 'left',
-          data: this.statusDistribution.map(item => item.name)
+          orient: 'horizontal',
+          top: 'bottom',
+          left: 'center',
+          padding: [10, 0, 0, 0],
+          itemGap: 20,
+          textStyle: {
+            fontSize: 14
+          }
         },
-        series: [
-          {
-            name: 'Document Status',
-            type: 'bar',
-            data: this.statusDistribution.map(item => ({
-              name: item.name,
-              value: item.value
-            })),
-            emphasis: {
-              itemStyle: {
-                shadowBlur: 10,
-                shadowOffsetX: 0,
-                shadowColor: 'rgba(0, 0, 0, 0.5)'
-              }
+        color: Object.values(colorMap),
+        series: [{
+          type: 'pie',
+          radius: ['40%', '70%'],
+          center: ['50%', '45%'],
+          avoidLabelOverlap: true,
+          itemStyle: {
+            borderRadius: 6,
+            borderColor: '#fff',
+            borderWidth: 2
+          },
+          label: {
+            show: false
+          },
+          labelLine: {
+            show: false
+          },
+          emphasis: {
+            label: {
+              show: true,
+              fontSize: '16',
+              fontWeight: 'bold'
             },
             itemStyle: {
-              color: (params) => {
-                const colors = {
-                  Uploaded: '#909399',
-                  Processing: '#409EFF',
-                  Completed: '#67C23A',
-                  Failed: '#F56C6C'
-                };
-                return colors[params.name] || '#909399';
-              }
+              shadowBlur: 10,
+              shadowOffsetX: 0,
+              shadowColor: 'rgba(0, 0, 0, 0.5)'
             }
-          }
-        ]
+          },
+          data: this.statusDistribution.map(item => ({
+            name: item.name,
+            value: item.value,
+            itemStyle: {
+              color: colorMap[item.name]
+            }
+          }))
+        }]
       };
 
       this.chart.setOption(option);
