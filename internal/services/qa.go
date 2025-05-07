@@ -100,14 +100,19 @@ func isGreeting(question string) bool {
 		}
 	}
 
-	// 检查是否部分匹配 (短问候语可能有附加内容)
-	if len(q) < 15 { // 限制长度防止误判
+	// 检查是否为有附加内容的问候语
+	// 仅对非常短的内容进行匹配，并且必须以问候语开头
+	if len(q) < 8 { // 降低长度限制，从15改为8
 		for _, g := range greetings {
-			if strings.HasPrefix(q, g+" ") || strings.Contains(q, g+"，") ||
-				strings.Contains(q, g+"!") || strings.Contains(q, g+"！") {
+			if strings.HasPrefix(q, g+" ") {
 				return true
 			}
 		}
+	}
+
+	// 如果包含问号，基本可以确定不是问候语
+	if strings.Contains(q, "?") || strings.Contains(q, "？") {
+		return false
 	}
 
 	return false
