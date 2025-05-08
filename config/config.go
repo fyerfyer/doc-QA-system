@@ -12,12 +12,13 @@ import (
 
 // Config 应用程序配置结构体
 type Config struct {
-	Server   ServerConfig   `mapstructure:"server"`
-	Storage  StorageConfig  `mapstructure:"storage"`
-	VectorDB VectorDBConfig `mapstructure:"vectordb"`
-	LLM      LLMConfig      `mapstructure:"llm"`
-	Embed    EmbedConfig    `mapstructure:"embed"`
-	Cache    CacheConfig    `mapstructure:"cache"`
+	Server    ServerConfig    `mapstructure:"server"`
+	Storage   StorageConfig   `mapstructure:"storage"`
+	VectorDB  VectorDBConfig  `mapstructure:"vectordb"`
+	LLM       LLMConfig       `mapstructure:"llm"`
+	Embed     EmbedConfig     `mapstructure:"embed"`
+	Cache     CacheConfig     `mapstructure:"cache"`
+	TaskQueue TaskQueueConfig `mapstructure:"taskqueue"` // 任务队列配置
 }
 
 // ServerConfig 服务器配置
@@ -71,6 +72,26 @@ type CacheConfig struct {
 	Password string `mapstructure:"password"` // Redis密码
 	DB       int    `mapstructure:"db"`       // Redis数据库
 	TTL      int    `mapstructure:"ttl"`      // 缓存TTL（秒）
+}
+
+// TaskQueueConfig 任务队列配置
+type TaskQueueConfig struct {
+	Enable      bool              `mapstructure:"enable"`       // 是否启用任务队列
+	Type        string            `mapstructure:"type"`         // 队列类型：redis
+	Address     string            `mapstructure:"address"`      // Redis地址
+	Password    string            `mapstructure:"password"`     // Redis密码
+	DB          int               `mapstructure:"db"`           // Redis数据库
+	Prefix      string            `mapstructure:"prefix"`       // 键前缀
+	MaxRetries  int               `mapstructure:"max_retries"`  // 最大重试次数
+	Timeout     int               `mapstructure:"timeout"`      // 操作超时（秒）
+	MonitorFreq int               `mapstructure:"monitor_freq"` // 任务监控频率（秒）
+	PythonTasks PythonTasksConfig `mapstructure:"python_tasks"` // Python微服务任务配置
+}
+
+// PythonTasksConfig Python微服务任务配置
+type PythonTasksConfig struct {
+	DocumentProcess bool `mapstructure:"document_process"` // 启用文档处理任务
+	EmbeddingGen    bool `mapstructure:"embedding_gen"`    // 启用嵌入生成任务
 }
 
 // Load 从文件和环境变量加载配置
@@ -157,4 +178,22 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("cache.enable", true)
 	v.SetDefault("cache.type", "memory")
 	v.SetDefault("cache.ttl", 3600) // 1小时
+	v.SetDefault("cache.address", "localhost:6379")
+	v.SetDefault("cache.password", "")
+	v.SetDefault("cache.db", 0)
+
+	// 任务队列默认配置
+	v.SetDefault("taskqueue.enable", true)
+	v.SetDefault("taskqueue.type", "redis")
+	v.SetDefault("taskqueue.address", "localhost:6379")
+	v.SetDefault("taskqueue.password", "")
+	v.SetDefault("taskqueue.db", 1) // 使用不同的数据库避免与缓存冲突
+	v.SetDefault("taskqueue.prefix", "taskqueue:")
+	v.SetDefault("taskqueue.max_retries", 3)
+	v.SetDefault("taskqueue.timeout", 30)     // 30秒
+	v.SetDefault("taskqueue.monitor_freq", 5) // 5秒检查一次
+
+	// Python任务配置
+	v.SetDefault("taskqueue.python_tasks.document_process", true)
+	v.SetDefault("taskqueue.python_tasks.embedding_gen", true)
 }

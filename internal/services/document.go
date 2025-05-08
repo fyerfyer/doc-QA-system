@@ -8,10 +8,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fyerfyer/doc-QA-system/config"
 	"github.com/fyerfyer/doc-QA-system/internal/document"
 	"github.com/fyerfyer/doc-QA-system/internal/embedding"
 	"github.com/fyerfyer/doc-QA-system/internal/models"
 	"github.com/fyerfyer/doc-QA-system/internal/repository"
+	"github.com/fyerfyer/doc-QA-system/internal/taskqueue"
 	"github.com/fyerfyer/doc-QA-system/internal/vectordb"
 	"github.com/fyerfyer/doc-QA-system/pkg/storage"
 	"github.com/sirupsen/logrus"
@@ -30,6 +32,8 @@ type DocumentService struct {
 	batchSize     int                           // 批处理大小
 	timeout       time.Duration                 // 处理超时时间
 	logger        *logrus.Logger                // 日志记录器
+	queue         taskqueue.Queue               // 任务队列
+	usePython     bool                          // 是否使用Python处理
 }
 
 // DocumentOption 文档服务配置选项
@@ -54,6 +58,7 @@ func NewDocumentService(
 		batchSize: 16,              // 默认批处理大小
 		timeout:   time.Minute * 5, // 默认超时时间
 		logger:    logrus.New(),    // 默认日志记录器
+		usePython: false,           // 默认不使用Python处理
 	}
 
 	// 应用配置选项
@@ -103,6 +108,20 @@ func WithStatusManager(manager *DocumentStatusManager) DocumentOption {
 	}
 }
 
+// WithTaskQueue 设置任务队列
+func WithTaskQueue(queue taskqueue.Queue) DocumentOption {
+	return func(s *DocumentService) {
+		s.queue = queue
+	}
+}
+
+// WithPythonProcessing 启用Python微服务处理
+func WithPythonProcessing(enabled bool) DocumentOption {
+	return func(s *DocumentService) {
+		s.usePython = enabled
+	}
+}
+
 // Init 初始化文档服务
 // 确保必要的依赖都已设置
 func (s *DocumentService) Init() error {
@@ -127,8 +146,9 @@ func (s *DocumentService) ProcessDocument(ctx context.Context, fileID string, fi
 	}
 
 	s.logger.WithFields(logrus.Fields{
-		"file_id":   fileID,
-		"file_path": filePath,
+		"file_id":    fileID,
+		"file_path":  filePath,
+		"use_python": s.usePython,
 	}).Info("Starting document processing")
 
 	// 检查输入参数
@@ -139,6 +159,45 @@ func (s *DocumentService) ProcessDocument(ctx context.Context, fileID string, fi
 		return errors.New("filePath cannot be empty")
 	}
 
+	// 如果使用Python微服务处理，则将任务加入队列
+	if s.usePython && s.queue != nil {
+		// 更新文档状态为处理中
+		if err := s.statusManager.MarkAsProcessing(ctx, fileID); err != nil {
+			s.logger.WithError(err).Error("Failed to mark document as processing")
+			// 继续处理，不中断
+		}
+
+		// 创建任务
+		task := taskqueue.NewTask(
+			taskqueue.TaskTypeDocumentProcess,
+			fileID,
+			filePath,
+			map[string]interface{}{
+				"enqueued_at": time.Now().Format(time.RFC3339),
+			},
+		)
+
+		// 将任务加入队列
+		taskID, err := s.queue.Enqueue(task)
+		if err != nil {
+			// 如果入队失败，标记文档处理失败
+			errMsg := fmt.Sprintf("failed to enqueue document processing task: %v", err)
+			if markErr := s.statusManager.MarkAsFailed(ctx, fileID, errMsg); markErr != nil {
+				s.logger.WithError(markErr).Error("Failed to mark document as failed")
+			}
+			return fmt.Errorf("failed to enqueue document processing task: %w", err)
+		}
+
+		s.logger.WithFields(logrus.Fields{
+			"file_id":   fileID,
+			"task_id":   taskID,
+			"task_type": task.Type,
+		}).Info("Document processing task enqueued successfully")
+
+		return nil
+	}
+
+	// 以下是本地处理文档的流程
 	// 设置上下文超时
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
@@ -284,25 +343,23 @@ func (s *DocumentService) processBatches(ctx context.Context, fileID string, fil
 		dbSegments := make([]*models.DocumentSegment, len(batch))
 
 		for j := range batch {
+			segmentID := fmt.Sprintf("%s_%d", fileID, batch[j].Index)
+
 			// 创建向量数据库文档
 			docs[j] = vectordb.Document{
-				ID:        fmt.Sprintf("%s_%d", fileID, batch[j].Index),
+				ID:        segmentID,
 				FileID:    fileID,
 				FileName:  fileName,
 				Position:  batch[j].Index,
 				Text:      batch[j].Text,
 				Vector:    vectors[j],
 				CreatedAt: time.Now(),
-				Metadata: map[string]interface{}{
-					"source": filePath,
-					"index":  batch[j].Index,
-				},
 			}
 
 			// 创建数据库段落记录
 			dbSegments[j] = &models.DocumentSegment{
 				DocumentID: fileID,
-				SegmentID:  fmt.Sprintf("%s_%d", fileID, batch[j].Index),
+				SegmentID:  segmentID,
 				Position:   batch[j].Index,
 				Text:       batch[j].Text,
 			}
@@ -310,13 +367,12 @@ func (s *DocumentService) processBatches(ctx context.Context, fileID string, fil
 
 		// 批量插入向量数据库
 		if err := s.vectorDB.AddBatch(docs); err != nil {
-			return fmt.Errorf("failed to store vectors: %w", err)
+			return fmt.Errorf("failed to add documents to vector database: %w", err)
 		}
 
 		// 批量保存段落到数据库
 		if err := s.repo.SaveSegments(dbSegments); err != nil {
-			s.logger.WithError(err).Error("Failed to save segments to database")
-			// 不中断处理
+			return fmt.Errorf("failed to save document segments: %w", err)
 		}
 
 		processedBatches++
@@ -341,8 +397,8 @@ func (s *DocumentService) DeleteDocument(ctx context.Context, fileID string) err
 
 	// 1. 从向量数据库中删除
 	if err := s.vectorDB.DeleteByFileID(fileID); err != nil {
-		s.logger.WithError(err).Error("Failed to delete document vectors")
-		return fmt.Errorf("failed to delete document vectors: %w", err)
+		// 可能文件在向量数据库中不存在，记录错误但继续
+		s.logger.WithError(err).Warn("Failed to delete document from vector database")
 	}
 
 	// 2. 从存储中删除文件
@@ -351,10 +407,26 @@ func (s *DocumentService) DeleteDocument(ctx context.Context, fileID string) err
 		s.logger.WithError(err).Warn("Failed to delete file from storage")
 	}
 
+	// 如果使用Python微服务，则创建删除任务
+	if s.usePython && s.queue != nil {
+		task := taskqueue.NewTask(
+			"document.delete",
+			fileID,
+			"",
+			nil,
+		)
+
+		// 将任务加入队列
+		_, err := s.queue.Enqueue(task)
+		if err != nil {
+			s.logger.WithError(err).Warn("Failed to enqueue document deletion task")
+		}
+	}
+
 	// 3. 删除文档状态记录
 	if err := s.statusManager.DeleteDocument(ctx, fileID); err != nil {
-		s.logger.WithError(err).Error("Failed to delete document status record")
-		return fmt.Errorf("failed to delete document status record: %w", err)
+		s.logger.WithError(err).Error("Failed to delete document status")
+		return fmt.Errorf("failed to delete document status: %w", err)
 	}
 
 	s.logger.WithField("file_id", fileID).Info("Document deleted successfully")
@@ -453,14 +525,102 @@ func (s *DocumentService) failDocument(ctx context.Context, fileID string, error
 	}
 
 	if err := s.statusManager.MarkAsFailed(ctx, fileID, errorMsg); err != nil {
-		s.logger.WithFields(logrus.Fields{
-			"file_id": fileID,
-			"error":   err,
-		}).Error("Failed to mark document as failed")
+		s.logger.WithError(err).Error("Failed to mark document as failed")
 	}
 }
 
 // GetStatusManager 返回文档状态管理器实例
 func (s *DocumentService) GetStatusManager() *DocumentStatusManager {
 	return s.statusManager
+}
+
+// CreateFromConfig 从配置创建文档服务
+// 根据配置决定使用本地处理还是Python微服务处理
+func CreateFromConfig(cfg *config.Config, storage storage.Storage, logger *logrus.Logger) (*DocumentService, error) {
+	// 创建文本分段器
+	splitterConfig := document.SplitterConfig{
+		SplitType:    document.ByParagraph,
+		ChunkSize:    1000,
+		ChunkOverlap: 200,
+	}
+	splitter := document.NewTextSplitter(splitterConfig)
+
+	// 创建嵌入客户端
+	embeddingOptions := []embedding.Option{
+		embedding.WithAPIKey(cfg.Embed.APIKey),
+		embedding.WithBaseURL(cfg.Embed.Endpoint),
+		embedding.WithModel(cfg.Embed.Model),
+		embedding.WithTimeout(30 * time.Second),
+	}
+
+	embedder, err := embedding.NewClient("tongyi", embeddingOptions...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create embedding client: %w", err)
+	}
+
+	// 创建向量数据库
+	vectorDBConfig := vectordb.Config{
+		Type:              cfg.VectorDB.Type,
+		Path:              cfg.VectorDB.Path,
+		Dimension:         cfg.VectorDB.Dim,
+		DistanceType:      vectordb.DistanceType(cfg.VectorDB.Distance),
+		CreateIfNotExists: true,
+	}
+
+	vectorDB, err := vectordb.NewRepository(vectorDBConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create vector database: %w", err)
+	}
+
+	// 创建文档解析器
+	parser, err := document.ParserFactory("dummy.txt") // 先创建一个通用解析器，具体文件会在运行时确定
+	if err != nil {
+		return nil, fmt.Errorf("failed to create document parser: %w", err)
+	}
+
+	// 创建文档服务选项
+	options := []DocumentOption{
+		WithLogger(logger),
+		WithBatchSize(cfg.Embed.BatchSize),
+	}
+
+	// 如果启用任务队列和Python处理，则创建任务队列并配置
+	if cfg.TaskQueue.Enable && cfg.TaskQueue.PythonTasks.DocumentProcess {
+		// 创建Redis任务队列
+		redisConfig := taskqueue.RedisQueueConfig{
+			Address:  cfg.TaskQueue.Address,
+			Password: cfg.TaskQueue.Password,
+			DB:       cfg.TaskQueue.DB,
+			Prefix:   cfg.TaskQueue.Prefix,
+			Timeout:  time.Duration(cfg.TaskQueue.Timeout) * time.Second,
+		}
+
+		queue, err := taskqueue.NewRedisQueue(redisConfig,
+			taskqueue.WithMaxRetries(cfg.TaskQueue.MaxRetries),
+			taskqueue.WithTimeout(time.Duration(cfg.TaskQueue.Timeout)*time.Second),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create task queue: %w", err)
+		}
+
+		// 添加队列和Python处理选项
+		options = append(options, WithTaskQueue(queue))
+		options = append(options, WithPythonProcessing(true))
+
+		logger.Info("Python document processing enabled via task queue")
+	} else {
+		logger.Info("Using local document processing")
+	}
+
+	// 创建本地文档服务
+	docService := NewDocumentService(
+		storage,
+		parser,
+		splitter,
+		embedder,
+		vectorDB,
+		options...,
+	)
+
+	return docService, nil
 }
