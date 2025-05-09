@@ -271,7 +271,7 @@ class Worker:
             # 发布消息
             self.redis_client.publish(channel, json.dumps(message))
 
-    def _process_task(self, task: Dict[str, Any]) -> Tuple[bool, Any]:
+    def _process_task(self, task: Dict[str, Any]) -> tuple[bool, Any]:
         """
         处理任务
 
@@ -298,7 +298,7 @@ class Worker:
             traceback.print_exc()
             return False, str(e)
 
-    def _process_document(self, task: Dict[str, Any]) -> Tuple[bool, Any]:
+    def _process_document(self, task: Dict[str, Any]) -> tuple[bool, Any]:
         """
         处理文档解析任务
 
@@ -354,7 +354,7 @@ class Worker:
             traceback.print_exc()
             return False, str(e)
 
-    def _delete_document(self, task: Dict[str, Any]) -> Tuple[bool, Any]:
+    def _delete_document(self, task: Dict[str, Any]) -> tuple[bool, Any]:
         """
         处理文档删除任务
 
@@ -382,7 +382,7 @@ class Worker:
             self.logger.error(f"Document deletion failed: {e}")
             return False, str(e)
 
-    def _generate_embedding(self, task: Dict[str, Any]) -> Tuple[bool, Any]:
+    def _generate_embedding(self, task: Dict[str, Any]) -> tuple[bool, Any]:
         """
         处理嵌入向量生成任务
 
@@ -393,7 +393,7 @@ class Worker:
             (success, result_or_error): 元组，表示处理是否成功及结果或错误信息
         """
         texts = task.get('texts', [])
-        batch_size = task.get('batch_size', 6)  # 通义千问v3模型最多支持6条文本
+        batch_size = min(task.get('batch_size', 6), 6)  # Ensure max is 6 for v3 model
 
         if not texts:
             return False, "No texts provided for embedding generation"

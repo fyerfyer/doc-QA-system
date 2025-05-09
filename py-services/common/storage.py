@@ -68,8 +68,13 @@ class Storage:
                         return f.read()
 
                 raise FileNotFoundError(f"File not found: {file_id}")
-            except IOError as e:
+            except FileNotFoundError as e:
+                # 直接继续抛出FileNotFoundError，不转换为IOError
                 self.logger.error(f"Failed to read file: {e}")
+                raise
+            except IOError as e:
+                # 其他IO错误保持原样抛出
+                self.logger.error(f"IO error when reading file: {e}")
                 raise IOError(f"Failed to read file: {e}")
         else:
             # MinIO存储

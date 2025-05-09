@@ -1,7 +1,7 @@
 import os
 import logging
 from typing import Union, BinaryIO, IO
-import fitz  # PyMuPDF for PDF parsing
+import pymupdf as fitz
 
 class DocumentParser:
     """文档解析服务，支持PDF、Markdown和纯文本格式"""
@@ -52,16 +52,22 @@ class DocumentParser:
         # 获取文件扩展名
         _, ext = os.path.splitext(filename.lower())
 
-        # 根据文件类型选择解析方法
-        if ext == '.pdf':
-            return self._parse_pdf(content)
-        elif ext in ['.md', '.markdown']:
-            return self._parse_markdown(content)
-        elif ext == '.txt' or ext == '':  # 支持无扩展名文件作为文本处理
-            return self._parse_text(content)
-        else:
-            self.logger.error(f"Unsupported file type: {ext}")
-            raise ValueError(f"Unsupported file type: {ext}")
+        try:
+            # 根据文件类型选择解析方法
+            if ext == '.pdf':
+                return self._parse_pdf(content)
+            elif ext in ['.md', '.markdown']:
+                return self._parse_markdown(content)
+            elif ext == '.txt' or ext == '':  # 支持无扩展名文件作为文本处理
+                return self._parse_text(content)
+            else:
+                self.logger.error(f"Unsupported file type: {ext}")
+                raise ValueError(f"Unsupported file type: {ext}")
+        except Exception as e:
+            if isinstance(e, ValueError) and "Unsupported file type" in str(e):
+                raise  # 重新抛出"不支持的文件类型"错误
+            self.logger.error(f"Failed to parse text: {e}")
+            raise ValueError(f"Failed to parse text: {e}")
 
     def _parse_pdf(self, content: bytes) -> str:
         """

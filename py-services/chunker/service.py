@@ -174,42 +174,52 @@ class TextChunker:
         Returns:
             固定长度的文本块列表
         """
+        if not text:
+            return []
+
+        if len(text) <= self.chunk_size:
+            return [text]
+
         chunks = []
+        start = 0
 
-        # 对于按字符分割，需要考虑不切断单词和词组
-        i = 0
-        while i < len(text):
-            # 计算当前块的结束位置
-            end_pos = min(i + self.chunk_size, len(text))
+        while start < len(text):
+            # 确定当前块的结束位置
+            end = min(start + self.chunk_size, len(text))
 
-            # 如果不是文本末尾，寻找合适的截断点
-            if end_pos < len(text):
-                # 寻找句子结束的位置
-                sentence_end = self._find_sentence_end(text, i, end_pos)
-                if sentence_end > i:
-                    end_pos = sentence_end
+            # 如果不是最后一个块且不在文本末尾，找更好的断点
+            if end < len(text):
+                # 尝试在句子结束处断开
+                sentence_end = self._find_sentence_end(text, start, end)
+                if sentence_end > start:
+                    end = sentence_end
                 else:
-                    # 寻找段落结束的位置
-                    para_end = text.rfind('\n', i, end_pos)
-                    if para_end > i:
-                        end_pos = para_end
+                    # 尝试在段落结束处断开
+                    para_end = text.rfind('\n', start, end)
+                    if para_end > start:
+                        end = para_end + 1  # 包含换行符
                     else:
-                        # 寻找单词边界
-                        word_end = self._find_word_boundary(text, i, end_pos)
-                        if word_end > i:
-                            end_pos = word_end
+                        # 尝试在单词边界断开
+                        word_end = text.rfind(' ', start, end)
+                        if word_end > start:
+                            end = word_end + 1  # 包含空格
 
             # 添加当前块
-            chunk = text[i:end_pos].strip()
-            if chunk:
-                chunks.append(chunk)
+            current_chunk = text[start:end].strip()
+            if current_chunk:
+                chunks.append(current_chunk)
 
-            # 移动到下一个位置，考虑块之间的重叠
-            i = end_pos - self.chunk_overlap if end_pos - i > self.chunk_overlap else end_pos
+            # 计算下一个块的起始位置，考虑重叠
+            if self.chunk_overlap >= end - start:
+                # 如果重叠区域大于块大小，避免原地踏步
+                start = end
+            else:
+                # 否则正常应用重叠
+                start = end - self.chunk_overlap
 
-            # 确保前进至少一个字符，避免无限循环
-            if i <= 0:
-                i = end_pos
+            # 如果没有前进，强制前进以避免无限循环
+            if start == end:
+                break
 
         return chunks
 

@@ -58,42 +58,30 @@ class TextEmbedder:
         self.logger.info(f"Initialized TextEmbedder with model: {self.model_name}")
 
     def _call_embedding_api(self, texts: List[str]) -> DashScopeAPIResponse:
-        """
-        调用通义千问embedding API
-
-        Args:
-            texts: 要转换的文本列表
-
-        Returns:
-            DashScope API响应对象
-
-        Raises:
-            Exception: API调用失败时抛出异常
-        """
-        # 对于v3模型，需要限制每批次最多6条文本
-        if self.model_name == "text-embedding-v3" and len(texts) > 6:
-            self.logger.warning(f"{self.model_name} supports maximum 6 texts per batch, received {len(texts)}")
-            texts = texts[:6]
+        """调用通义千问embedding API"""
+        # 对于v3模型，需要限制每批次最多10条文本
+        if self.model_name == "text-embedding-v3" and len(texts) > 10:
+            self.logger.warning(f"{self.model_name} supports maximum 10 texts per batch, received {len(texts)}")
+            texts = texts[:10]
         # 对于v1和v2模型，限制每批次最多25条文本
         elif self.model_name in ["text-embedding-v1", "text-embedding-v2"] and len(texts) > 25:
             self.logger.warning(f"{self.model_name} supports maximum 25 texts per batch, received {len(texts)}")
             texts = texts[:25]
-
+    
         # 设置API调用参数
         kwargs = {
             "model": self.model_name,
-            "input": texts,
-            "encoding_format": "float"
+            "input": texts
         }
 
         # 对于v3模型，添加维度参数
         if self.model_name == "text-embedding-v3":
-            kwargs["dimensions"] = self.dimension
+            kwargs["dimension"] = self.dimension
 
         for attempt in range(self.max_retries + 1):
             try:
-                # 使用兼容OpenAI的接口调用通义千问embedding服务
-                response = dashscope.embeddings.create(**kwargs)
+                # 使用通义千问官方API调用方式
+                response = dashscope.TextEmbedding.call(**kwargs)
                 return response
             except Exception as e:
                 if attempt < self.max_retries:
@@ -131,7 +119,7 @@ class TextEmbedder:
             raise Exception(f"API error: {error_msg}")
 
         # 从响应中提取向量
-        embedding = response.data[0].embedding
+        embedding = response.output['embeddings'][0]['embedding']
         return embedding
 
     def embed_batch(self, texts: List[str]) -> List[List[float]]:
@@ -174,7 +162,7 @@ class TextEmbedder:
                 raise Exception(f"API error: {error_msg}")
 
             # 从响应中提取向量
-            batch_embeddings = [item.embedding for item in response.data]
+            batch_embeddings = [item['embedding'] for item in response.output['embeddings']]
             all_embeddings.extend(batch_embeddings)
 
         # 确保结果和输入长度一致

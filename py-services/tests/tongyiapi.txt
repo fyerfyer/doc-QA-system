@@ -1,0 +1,1482 @@
+```
+DashScope
+公共云金融云
+使用HTTP方式调用时需配置的endpoint：POST https://dashscope.aliyuncs.com/api/v1/services/embeddings/text-embedding/text-embedding
+
+请求体
+输入字符串输入字符串列表输入文件
+PythonJavacurl
+ 
+import dashscope
+from http import HTTPStatus
+
+resp = dashscope.TextEmbedding.call(
+    model=dashscope.TextEmbedding.Models.text_embedding_v3,
+    input='风急天高猿啸哀, 渚清沙白鸟飞回, 无边落木萧萧下, 不尽长江滚滚来',
+    dimension=1024,
+    output_type="dense&sparse"
+)
+
+print(resp) if resp.status_code == HTTPStatus.OK else print(resp)
+model string 必选
+
+调用模型名称，可以选择text-embedding-v1，text-embedding-v2或者text-embedding-v3。
+
+input string或array<string> 必选
+
+输入文本的基本信息，可以是字符串，字符串列表， 或者打开的文件（需要Embedding的内容，一行一条）。
+
+文本限制：
+
+文本数量：
+
+作为字符串时最长支持 2,048 Token。
+
+作为字符串列表时最多支持 25 条，每条最长支持 2,048 Token。
+
+text-embedding-v3模型input是字符串列表时最多支持 10 条，每条最长支持 8,192 Token。
+作为文件时最多支持 25 条，每条最长支持 2,048 Token。
+
+text-embedding-v3模型input是文本文件时最多支持 10 行，每行最长支持 8,192 Token。
+text_type string 可选
+
+文本转换为向量后可以应用于检索、聚类、分类等下游任务，对检索这类非对称任务为了达到更好的检索效果建议区分查询文本（query）和底库文本（document）类型, 聚类、分类等对称任务可以不用特殊指定，采用系统默认值document即可。
+
+dimension integer 可选
+
+用于用户指定输出向量维度，只适用于text-embedding-v3模型。指定的值只能在1024、768、512、256、128或64六个值之间选取，默认值为1024。
+
+output_type string 可选
+
+用户指定输出离散向量表示只适用于text-embedding-v3模型，取值在dense、sparse、dense&sparse之间，默认取dense，只输出连续向量。
+
+响应对象
+成功响应异常响应
+ 
+{   "status_code": 200, 
+    "request_id": "1ba94ac8-e058-99bc-9cc1-7fdb37940a46", 
+    "code": "", 
+    "message": "",
+    "output":{
+        "embeddings": [
+          {  
+             "sparse_embedding":[
+               {"index":7149,"value":0.829,"token":"风"},
+               .....
+               {"index":111290,"value":0.9004,"token":"哀"}],
+             "embedding": [-0.006929283495992422,-0.005336422007530928, ...],
+             "text_index": 0
+          }, 
+          {
+             "sparse_embedding":[
+               {"index":246351,"value":1.0483,"token":"渚"},
+               .....
+               {"index":2490,"value":0.8579,"token":"回"}],
+             "embedding": [-0.006929283495992422,-0.005336422007530928, ...],
+             "text_index": 1
+          },
+          {
+             "sparse_embedding":[
+               {"index":3759,"value":0.7065,"token":"无"},
+               .....
+               {"index":1130,"value":0.815,"token":"下"}],
+             "embedding": [-0.006929283495992422,-0.005336422007530928, ...],
+             "text_index": 2
+          },
+          {
+             "sparse_embedding":[
+               {"index":562,"value":0.6752,"token":"不"},
+               .....
+               {"index":1589,"value":0.7097,"token":"来"}],
+             "embedding": [-0.001945948973298072,-0.005336422007530928, ...],
+             "text_index": 3
+          }
+        ]
+    },
+    "usage":{
+        "total_tokens":27
+    },
+    "request_id":"xxxxxxxx"
+}
+status_code string
+
+状态码，表示请求的执行结果（如 200 表示成功）。
+
+request_id string
+
+请求唯一标识。可用于请求明细溯源和问题排查。
+
+code string
+
+请求失败，表示错误码，成功时返回参数中该参数为空。
+
+message string
+
+请求失败，表示失败详细信息，成功时返回参数中该参数为空。
+
+output object
+
+任务输出信息。
+
+属性
+
+embeddings array
+
+本次请求的算法输出内容，是一个由结构组成的数组，每一个数组中包含一个对应的输入 text 的算法输出内容。
+
+属性
+
+usage object
+
+属性
+
+total_tokens integer
+
+本次请求输入内容的 token 数目，算法的计量是根据用户输入字符串被模型tokenizer解析之后对应的token 数目来进行。
+
+request_id string
+
+请求唯一标识。可用于请求明细溯源和问题排查
+
+通用文本向量批处理API接口
+通用文本向量的典型应用场景有两种形态，一个是日常的查询，一个是建库/更新库操作。在建库/更新库操作的时候，用户需要对大量的文本内容计算通用文本向量并且批量的进行更新，在这个场景下，同步接口的服务能力往往成为瓶颈，一方面客户高频的调用同步接口给客户带来了额外的复杂性，另一方面大量的文本内容计算可能会触发接口的限流机制。
+
+所以为了满足客户的实际应用需求，DashScope同时推出了通用文本向量的批处理接口，通过这个接口客户可以以文本方式一次性的提交大批量的向量计算请求，在系统完成所有的计算之后，大模型服务平台会将结果信息存储在结果文件中供客户下载解析。
+
+模型概览
+
+
+
+
+
+
+
+模型中文名
+
+模型英文名
+
+数据类型
+
+向量维度
+
+单次请求文本最大行数
+
+单行最大输入字符长度
+
+支持语种
+
+通用文本向量
+
+text-embedding-async-v1
+
+float(32位)
+
+1536
+
+100000
+
+2048
+
+中文、英语、西班牙语、法语、葡萄牙语、印尼语。
+
+text-embedding-async-v2
+
+中文、英语、西班牙语、法语、葡萄牙语、印尼语、日语、韩语、德语、俄罗斯语。
+
+SDK使用
+前提条件
+已开通服务并获得API-KEY：获取API-KEY。
+
+已安装最新版SDK：安装SDK。
+
+本模型请求处理时间较长，服务采用异步方式提供，SDK进行了封装，您既可以按异步方式调用，也可以按照同步方式调用。
+
+说明
+接口限制：对单账户（含主账号与RAM子账号）任务下发接口限制QPS为1，并发任务数量限制为3。
+
+设置API-KEY
+ 
+ export DASHSCOPE_API_KEY=YOUR_DASHSCOPE_API_KEY
+同步调用模式
+同步调用模式，sdk封装了异步调用逻辑，会一直等待任务结束才会返回。
+
+PythonJava
+
+ 
+from dashscope import BatchTextEmbedding
+
+
+def call():
+    result = BatchTextEmbedding.call(BatchTextEmbedding.Models.text_embedding_async_v1,
+                                     url="https://modelscope.oss-cn-beijing.aliyuncs.com/resource/text_embedding_file.txt",
+                                     text_type="document")
+    print(result)
+
+
+if __name__ == '__main__':
+    call()
+
+同步返回结果
+python返回结果示例
+
+JSON
+
+ 
+{
+    "status_code": 200,
+    "request_id": "e941b97b-3b82-9de5-9ef0-512815b9c0ca",
+    "code": null,
+    "message": "",
+    "output": {
+        "task_id": "0b8ccc25-dec8-4d5f-bb84-cfe2ea580f9d",
+        "task_status": "SUCCEEDED",
+        "url": "The embedding result file url.",
+        "submit_time": "2023-09-07 10:22:52.459",
+        "scheduled_time": "2023-09-07 10:22:52.481",
+        "end_time": "2023-09-07 10:22:53.419"
+    },
+    "usage": {
+        "total_tokens": 384
+    }
+}
+异步调用模式
+异步调用模式，用户请求后，马上返回批处理作业信息，主要包含批处理作业id，后续可以通过批处理作业id来查询批处理作业执行情况。
+
+PythonJava
+
+ 
+from dashscope import BatchTextEmbedding
+from http import HTTPStatus
+
+
+# 创建异步任务
+def create_async_task():
+    rsp = BatchTextEmbedding.async_call(model=BatchTextEmbedding.Models.text_embedding_async_v1,
+                                        url="https://modelscope.oss-cn-beijing.aliyuncs.com/resource/text_embedding_file.txt",
+                                        text_type="document")
+    if rsp.status_code == HTTPStatus.OK:
+        print(rsp.output)
+        print(rsp.usage)
+    else:
+        print('Failed, status_code: %s, code: %s, message: %s' %
+              (rsp.status_code, rsp.code, rsp.message))
+    return rsp
+
+
+# 获取异步任务信息
+def fetch_task_status(task):
+    status = BatchTextEmbedding.fetch(task)
+    print(status)
+    if status.status_code == HTTPStatus.OK:
+        print(status.output.task_status)
+    else:
+        print('Failed, status_code: %s, code: %s, message: %s' %
+              (status.status_code, status.code, status.message))
+
+
+# 等待异步任务结束，内部封装轮询逻辑，会一直等待任务结束
+def wait_task(task):
+    rsp = BatchTextEmbedding.wait(task)
+    print(rsp)
+    if rsp.status_code == HTTPStatus.OK:
+        print(rsp.output.task_status)
+    else:
+        print('Failed, status_code: %s, code: %s, message: %s' %
+              (rsp.status_code, rsp.code, rsp.message))
+
+
+# 取消异步任务，只有处于PENDING状态的任务才可以取消
+def cancel_task(task):
+    rsp = BatchTextEmbedding.cancel(task)
+    print(rsp)
+    if rsp.status_code == HTTPStatus.OK:
+        print(rsp.output.task_status)
+    else:
+        print('Failed, status_code: %s, code: %s, message: %s' %
+              (rsp.status_code, rsp.code, rsp.message))
+
+
+if __name__ == '__main__':
+    task_info = create_async_task()
+    fetch_task_status(task_info)
+    wait_task(task_info)
+
+创建批处理任务输出(python)
+ 
+{
+    "status_code": 200,
+    "request_id": "0465260e-396b-9ea1-858c-e2d98831de7d",
+    "code": "",
+    "message": "",
+    "output": {
+        "task_id": "bcd0606e-5bff-40ac-92ec-6de51b69b403",
+        "task_status": "PENDING",
+        "url": null
+    },
+    "usage": null
+}
+任务执行中状态信息(python)
+ 
+{
+    "status_code": 200,
+    "request_id": "5113303b-e618-931c-8fea-0cc04cbf4725",
+    "output": {
+        "task_id": "0d056efd-0588-433a-a085-3ced4cefcfee",
+        "task_status": "RUNNING",
+        "submit_time": "2023-09-07 11:08:54.268",
+        "scheduled_time": "2023-09-07 11:08:54.311"
+    },
+    "usage": null
+}
+任务成功输出信息(python)
+ 
+{
+    "status_code": 200,
+    "request_id": "2020543c-89c1-9f0a-bd80-d0f32ecd0fc4",
+    "code": null,
+    "message": "",
+    "output": {
+        "task_id": "99f02f6c-a3e0-457e-8617-e92ae845c5a6",
+        "task_status": "SUCCEEDED",
+        "url": "THE-EMBEDDING-RESULT-FILE-URL",
+        "submit_time": "2023-09-07 11:00:34.518",
+        "scheduled_time": "2023-09-07 11:00:34.545",
+        "end_time": "2023-09-07 11:00:35.535"
+    },
+    "usage": {
+        "total_tokens": 384
+    }
+}
+取消任务输出(python)
+取消任务无输出，成功status_code=200
+
+ 
+{
+    "status_code": 200,
+    "request_id": "the request id",
+    "code": "",
+    "message": "",
+    "output": null,
+    "usage": null
+}
+仅能取消PENDING状态的任务，任务处于其他状态，返回取消失败，如下：
+
+ 
+{
+    "status_code": 400,
+    "request_id": "d0f9fc00-43c8-9dfa-9b8f-02c6b6a604f3",
+    "code": "UnsupportedOperation",
+    "message": "Failed to cancel the task, please confirm if the task is in PENDING status.",
+    "output": null,
+    "usage": null
+}
+调用参数说明
+
+
+
+
+参数
+
+类型
+
+默认值
+
+说明
+
+model
+
+string
+
+-
+
+指定模型名，支持text-embedding-async-v1 或者 text-embedding-async-v2。
+
+url
+
+string
+
+-
+
+用户需要批量embedding的文件http url，文件内容每行一条要embedding的记录。
+
+parameters.text_type
+
+string
+
+document
+
+取值：query 或者 document，默认值为 document
+
+说明：文本转换为向量后可以应用于检索、聚类、分类等下游任务，对检索这类非对称任务为了达到更好的检索效果建议区分查询文本（query）和底库文本（document）类型, 聚类、分类等对称任务可以不用特殊指定，采用系统默认值"document"即可
+
+结果参数说明
+
+
+
+返回参数
+
+类型
+
+说明
+
+status_code
+
+int
+
+200（HTTPStatus.OK）表示请求成功，否则表示请求失败，可以通过code获取错误码，通过message字段获取错误详细信息。
+
+request_Id
+
+string
+
+系统生成的标志本次调用的id。
+
+code
+
+string
+
+表示请求失败，表示错误码，成功忽略。
+
+message
+
+string
+
+失败，表示失败详细信息，成功忽略。
+
+output
+
+dict
+
+调用结果信息，对于千问模型，包含输出text。
+
+output.task_id
+
+string
+
+异步任务id。
+
+output.task_status
+
+string
+
+任务状态(SUCCEEDED,FAILED,CANCELED,PENDING,SUSPENDED,RUNNING)
+
+SUCCESSED: 任务执行成功
+
+FAILED: 任务执行失败
+
+CANCELED： 任务被取消
+
+PENDING：任务排队中
+
+SUSPENDED：任务挂起
+
+RUNNING：任务处理中
+
+output.url
+
+string
+
+生成的embedding结果http url。
+
+output.submit_time
+
+string
+
+任务提交时间
+
+output.scheduled_time
+
+string
+
+任务调度时间
+
+output.end_time
+
+string
+
+任务处理结束时间
+
+usage
+
+dict
+
+计量信息
+
+usage.total_tokens
+
+int
+
+本批处理任务token总数
+
+HTTP调用接口
+功能描述
+在提供了同步接口调用的 Embedding 能力的基础上，我们还新增了异步接口方案，为有大量的内容批量获取 Embedding 提供方便，异步接口支持客户以文本文件方式输入需要计算 Embedding 的输入（考虑到输入输出的便利性，目前文件限制为 200MB 以内，内容不超过十万行）。
+
+前提条件
+已开通服务并获得API-KEY：获取API-KEY。
+
+作业提交接口调用
+POST https://dashscope.aliyuncs.com/api/v1/services/embeddings/text-embedding/text-embedding
+
+入参描述
+
+
+
+
+
+
+传参方式
+
+字段
+
+类型
+
+必选
+
+描述
+
+示例值
+
+Header
+
+Content-Type
+
+String
+
+是
+
+请求类型：application/json
+
+application/json
+
+Authorization
+
+String
+
+是
+
+API-Key，例如：Bearer d1**2a
+
+Bearer d1**2a
+
+X-DashScope-WorkSpace
+
+String
+
+否
+
+指明本次调用需要使用的workspace；需要注意的是，对于子账号Apikey调用，此参数为必选项，子账号必须归属于某个workspace才能调用；对于主账号Apikey此项为可选项，添加则使用对应的workspace身份，不添加则使用主账号身份。
+
+ws_QTggmeAxxxxx
+
+X-DashScope-Async
+
+String
+
+是
+
+固定使用 enable，表明使用异步方式提交作业。
+
+enable
+
+Body
+
+model
+
+String
+
+是
+
+指明需要调用的模型，text-embedding-async-v1或者text-embedding-async-v2。
+
+text-embedding-async-v1
+
+input.url
+
+String
+
+是
+
+需要计算 embedding 的输入文件，文件为 utf8 格式的文本文件，每一行为一条需要计算 embedding 的输入字符串，支持中英文，每一行最长支持 2048 tokens；整体文件不超过 200MB，内容不超过十万行。
+
+"input": {
+
+"url": "https://test.com/t.txt"
+
+}
+
+parameters.text_type
+
+String
+
+否
+
+query 或者 document，默认值为 document
+
+"text_type": "query"
+
+出参描述
+
+
+
+
+字段
+
+类型
+
+描述
+
+示例值
+
+output.task_id
+
+String
+
+本次请求的异步任务的作业 id，实际作业结果需要通过异步任务查询接口获取。
+
+13b1848b-5493-4c0e-8c44-68d038b492af
+
+output.task_status
+
+String
+
+提交异步任务后的作业状态。
+
+PENDING
+
+request_id
+
+String
+
+本次请求的系统唯一码
+
+7574ee8f-38a3-4b1e-9280-11c33ab46e51
+
+请求示例
+以下示例展示通过CURL命令来调用本模型的脚本
+
+说明
+需要使用您的API-KEY替换示例中的 your-dashscope-api-key ，代码才能正常运行。
+
+Shell
+
+ 
+curl --location 'https://dashscope.aliyuncs.com/api/v1/services/embeddings/text-embedding/text-embedding' \
+--header 'Authorization: Bearer <your-dashscope-api-key>' \
+--header 'Content-Type: application/json' \
+--header 'X-DashScope-Async: enable' \
+--data '{
+    "model": "text-embedding-async-v1",
+    "input": {
+        "url": "https://modelscope.oss-cn-beijing.aliyuncs.com/resource/text_embedding_file.txt"
+    },
+    "parameters": {
+        "text_type": "query"
+    }
+}'
+响应示例
+JSON
+
+ 
+{
+    "output": {
+      	"task_id": "13b1848b-5493-4c0e-8c44-68d038b492af",
+        "task_status": "PENDING"
+    }
+    "request_id": "7574ee8f-38a3-4b1e-9280-11c33ab46e51"
+}
+异常响应示例
+在提交作业请求出错的情况下，输出的结果中会通过 code 和 message 指明出错原因。
+
+JSON
+
+ 
+{
+    "code": "InvalidApiKey",
+    "message": "Invalid API-key provided.",
+    "request_id": "fb53c4ec-1c12-4fc4-a580-cdb7c3261fc1"
+}
+作业任务状态查询和结果获取接口
+GET https://dashscope.aliyuncs.com/api/v1/tasks/{task_id}
+
+入参描述
+
+
+
+
+
+
+传参方式
+
+字段
+
+类型
+
+必选
+
+描述
+
+示例值
+
+Url Path
+
+task_id
+
+String
+
+是
+
+需要查询作业的 task_id
+
+13b1848b-5493-4c0e-8c44-68d038b492af
+
+Header
+
+Authorization
+
+String
+
+是
+
+API-Key，例如：Bearer d1**2a
+
+Bearer d1**2a
+
+出参描述
+
+
+
+
+字段
+
+类型
+
+描述
+
+示例值
+
+output.task_id
+
+String
+
+本次请求的异步任务的作业 id，实际作业结果需要通过异步任务查询接口获取。
+
+13b1848b-5493-4c0e-8c44-68d038b492af
+
+output.task_status
+
+String
+
+被查询作业的作业状态
+
+任务状态：
+
+PENDING 排队中
+
+RUNNING 处理中
+
+SUCCEEDED 成功
+
+FAILED 失败
+
+UNKNOWN 作业不存在或状态未知
+
+output.url
+
+String
+
+如果作业成功，用户提交数据生成的向量结果存储在输出文档中。为了节省存储和方便客户下载，输出文件会被压缩为 gz 格式，客户收到后可以解压缩即可得到对应的文本输出文件。
+
+https://dashscope-result-bj.oss-cn-beijing.aliyuncs.com/aaa.txt.gz
+
+usage.total_tokens
+
+Integer
+
+本次请求成功完成的tokens数目计量
+
+258
+
+request_id
+
+String
+
+本次请求的系统唯一码
+
+7574ee8f-38a3-4b1e-9280-11c33ab46e51
+
+请求示例
+以下示例展示通过CURL命令来调用本模型的脚本
+
+说明
+需要使用您的API-KEY替换示例中的 your-dashscope-api-key ，代码才能正常运行。
+
+Shell
+
+ 
+curl -X GET \
+--header 'Authorization: Bearer <your-dashscope-api-key>' \
+https://dashscope.aliyuncs.com/api/v1/tasks/86ecf553-d340-4e21-af6e-a0c6a421c010
+响应示例（作业执行中）
+作业提交后将处于排队状态，在得到调度之后将转为运行状态，此时作业的状态为RUNNING，task_metrics将给出具体batch状态；
+
+JSON
+
+ 
+{
+    "request_id":"ee6898af-25f9-9d44-8b0d-1d4dd5898fce",
+    "output":{
+        "task_id":"d95506b3-be65-432f-909b-4c83a8e5281e",
+        "task_status":"RUNNING"
+    }
+}
+响应示例（作业成功执行完毕）
+如果作业执行完成并成功之后，再次查询作业状态，接口将在告知作业状态的同时，一并将作业的结果返回。对于本模型，作业在结束之后的状态会持续保留24小时以备客户随时查询，24小时之后，作业将从系统中清除，相关的结果也将一并清除；对应的，作业生成的结果为图像的URL地址，出于安全考虑，该URL的下载有效期也是24小时，需要用户在获取作业结果后根据需要及时使用或者转存。
+
+JSON
+
+ 
+{
+    "request_id":"ee6898af-25f9-9d44-8b0d-1d4dd5898fce",
+    "output":{
+        "task_id":"d95506b3-be65-432f-909b-4c83a8e5281e",
+        "task_status":"SUCCEEDED",
+        "url":"https://dashscope-result-bj.oss-cn-beijing.aliyuncs.com/xxxx.txt.gz"
+    },
+    "usage":{
+        "total_tokens":258
+    }
+}
+响应示例（作业失败）
+如果因为某种原因作业失败，则作业状态会设置为FAILED，并且通过code和message字段指明错误原因。
+
+JSON
+
+ 
+{
+  "request_id": "7574ee8f-38a3-4b1e-9280-11c33ab46e51"
+  "output": {
+    	"task_id": "xxxxxxxx", 
+    	"task_status": "FAILED",
+        "code": "xxx", 
+         "message": "xxxxxx"
+  }  
+}
+状态码说明
+大模型服务平台通用状态码请查阅：状态码说明
+
+输入文件格式说明
+输入文件为 utf8 格式的文本文件，每一行为一个需要计算文字向量的字符串。作业提交之后，DashScope 会将每一行作为一个输入计算文字向量并在最终的输出文件中给出输入行号和输出的 embedding 结果。
+
+考虑到结果输出的存储和下载便利，每一个输入文件限制大小不超过 200MB，不超过十万行，如果任何一个限制超出，作业将会失败；对于每一行的内容限制是不超过 2048 tokens，如果超出了，其余正常行数还是可以继续计算，但是本行的结果会出现报错。
+
+对于空行（无任何字符，如果有无法显示的空字符则不会记为空行），系统会自动跳过不计算相应的向量输出，但是在输出文件的行号上会有体现，方便客户做输出结果对应。比如第 1 行有文字，第 2 行是一个空行，第 3 行又有文字，则最终输出的时候，结果中会有第 1 行和第 3 行结果，但是没有第 2 行内容。
+
+输入文件示例
+ 
+离离原上草
+一岁一枯荣
+野火烧不尽
+春风吹又生
+输出文件格式说明
+一旦作业成功完成，查询作业状态将会得到输出结果文件的链接，客户可以下载对应的输出结果文件并从中读取对应的 Embedding 输出结果。 Embedding 异步能力输出的文件是一个 jsonl 格式文件，即每一行都是一个完整的 json 结构，包含对应输入文件特定行的 Embedding 算法输出。
+
+输出文件参数列表
+如上文说明，输出文件的每一行都是一个完整的json结构，该结构包含下列内容项。
+
+
+
+
+
+字段
+
+类型
+
+描述
+
+示例值
+
+output.code
+
+Integer
+
+算法返回结果值，遵循 http 返回值管理，200 为成功
+
+"code":200
+
+output.message
+
+String
+
+算法返回结果描述，如果失败的话此处会包含失败原因的描述。
+
+"message":"Success"
+
+output.text_index
+
+Integer
+
+本行输出对应在输入文件中的行号，客户可以使用这个值定位到本输出对应的输入字符串；需要注意的是，因为算法后端并发处理的原因，这个字段不一定严格按照增量顺序排列。
+
+"text_index":6
+
+output.embedding
+
+Array
+
+该结构为一个由浮点数组成的数组，表明了对应输入行的 embedding 结果。
+
+[-0.006929283495992422,-0.005336422007530928, ...]
+
+output.usage.total_tokens
+
+Integer
+
+本次请求输入内容的总 token 数目，算法的计量是根据用户输入字符串被模型tokenizer解析之后对应的token 数目来进行。
+
+"usage":{ "total_tokens":71 }
+
+output.request_id
+
+String
+
+本次 embedding 计算请求的系统唯一码
+
+7574ee8f-38a3-4b1e-9280-11c33ab46e51
+
+输出文件示例
+下面是输出文件的一行内容经过格式优化输出后的例子
+
+ 
+{
+    "output":{
+        "code":200,
+        "embedding":Array[1536],
+        "message":"Success",
+        "request_id":"4809fe10-bbbe-43d7-9f29-0bab7600e3d5",
+        "text_index":6,
+        "usage":{
+            "total_tokens":71
+        }
+    }
+}
+实际的输出文件，每一行的内容都是以JSON压缩格式存储的，实际文件内容示例如下：
+
+ 
+{"output":{"code":200,"embedding":Array[1536],"message":"Success","request_id":"4809fe10-bbbe-43d7-9f29-0bab7600e3d5","text_index":6,"usage":{"total_tokens":71}}}
+{"output":{"code":200,"embedding":Array[1536],"message":"Success","request_id":"2809fe10-bbbe-43d7-9f29-0bab7600e3d5","text_index":6,"usage":{"total_tokens":71}}}
+{"output":{"code":200,"embedding":Array[1536],"message":"Success","request_id":"3809fe10-bbbe-43d7-9f29-0bab7600e3d5","text_index":6,"usage":{"total_tokens":71}}}
+... ...
+
+多模态向量模型将文本、图像或视频转换成一组由浮点数组成的向量，适用于视频分类、图像分类、图文检索等。
+
+模型介绍、选型建议和使用方法，请参考Embedding。
+模型概览
+
+
+
+
+
+
+模型名称
+
+数据类型
+
+向量维度
+
+单价
+
+免费额度（注）
+
+限流
+
+multimodal-embedding-v1
+
+float(32)
+
+1,024
+
+免费试用
+
+无加权条目数限制
+
+每分钟调用限制（RPM）：120
+
+通用多模态向量API使用过程中存在以下输入类型与格式限制
+
+
+
+
+输入类型
+
+语言/格式限制
+
+长度/大小限制
+
+文本
+
+中/英文
+
+512个Token, 超过512Token长度的文本内容将会被截断
+
+图片
+
+JPG、PNG、BMP
+
+支持以Base64格式或URL形式输入。可接受的图片大小上限为 3MB
+
+视频
+
+MP4、MPEG、MPG、WEBM、AVI、FLV、MKV、MOV
+
+可接受的视频大小上限为 10MB
+
+接口支持单段文字、单张图片或单个视频文件，允许不同类型单文件组合（如文字+图片）。每次调用仅限一种组合形式，且文件需符合表中长度/大小要求。
+前提条件
+您需要已获取API Key并配置API Key到环境变量。如果通过SDK调用，还需要安装DashScope SDK。
+
+SDK使用
+代码示例
+生成图片Embedding示例生成视频Embedding示例生成文本Embedding示例
+使用图片URL使用本地图片
+ 
+import dashscope
+import json
+from http import HTTPStatus
+# 实际使用中请将url地址替换为您的图片url地址
+image = "https://dashscope.oss-cn-beijing.aliyuncs.com/images/256_1.png"
+input = [{'image': image}]
+# 调用模型接口
+resp = dashscope.MultiModalEmbedding.call(
+    model="multimodal-embedding-v1",
+    input=input
+)
+
+if resp.status_code == HTTPStatus.OK:
+    print(json.dumps(resp.output, ensure_ascii=False, indent=4))
+输出示例
+JSON
+
+ 
+{
+    "status_code": 200,
+    "request_id": "b5623e99-ea0c-9509-9b25-20bcc99d03e9",
+    "code": "",
+    "message": "",
+    "output": {
+        "embeddings": [
+            {
+                "index": 0,
+                "embedding": [
+                    -0.020782470703125,
+                    -0.01399993896484375,
+                    -0.0229949951171875,
+                    ...
+                ],
+                "type": "text"
+            }
+        ]
+    },
+    "usage": {
+        "input_tokens": 12,
+        "image_count": 0,
+        "duration": 0
+    }
+}
+参数详解
+请求参数
+
+参数名称
+
+必选
+
+类型
+
+描述
+
+model
+
+是
+
+String
+
+取值："multimodal-embedding-v1",该值是固定值，无需更改
+
+说明：代表模型的英文名称
+
+input
+
+否
+
+Array[dict]
+
+/Array[str]
+
+多模态表征输入的具体内容
+
+其中text embedding相关的输入可直接传入string字段，不需要通过dict进行类型传入
+
+多模态类型支持text、image、video类型, 不同类型的参数值均为String类型，格式参考如下{"模态类型": "输入字符串或图像、视频url"}
+
+图片使用BASE64数据：将编码后的BASE64数据传递给image参数，格式为data:image/{format};base64,{base64_image}，其中：
+
+image/{format}：本地图像的格式。请根据实际的图像格式，例如图片为jpg格式，则设置为image/jpeg
+
+base64_image：图像的BASE64数据
+
+响应参数
+
+
+
+
+
+字段
+
+类型
+
+描述
+
+示例值
+
+status_code
+
+Integer
+
+本次结果HTTP响应码，200对应请求成功。
+
+ 
+"status_code": 200,
+    "request_id": "b5623e99-ea0c-9509-9b25-20bcc99d03e9",
+    "code": "",
+    "message": "",
+    "output": {
+        "embeddings": [
+            {
+                "index": 0,
+                "embedding": [
+                    -0.020782470703125,
+                    -0.01399993896484375,
+                    -0.0229949951171875,
+                    ...
+                ],
+                "type": "text"
+            }
+        ]
+    }
+code
+
+String
+
+仅请求失败时展示错误码。
+
+message
+
+String
+
+仅请求失败时展示详细错误信息。
+
+output.embedding
+
+Array[Dict]
+
+本次请求的算法输出内容，是一个由结构体组成的数组。该结构主要包含3个不同的字段：
+
+index: 本结构中的算法结果对应的输入内容在输入数组中的索引值。
+
+embedding: 对应输入下算法输出的embedding
+
+type: 表示该embedding的类型，目前支持text/image/video
+
+usage.[text|image|audio]
+
+dict
+
+对应各模态计量信息。
+
+input_tokens: 本次请求输入文本内容的Token数量
+
+image_count: 本次请求输入的图片张数
+
+duration: 本次请求的视频帧长
+
+ 
+"usage": {
+        "input_tokens": 12,
+        "image_count": 0,
+        "duration": 0
+    }
+request_id
+
+String
+
+本次请求的系统唯一码
+
+7574ee8f-38a3-4b1e-9280-11c33ab46e51
+
+HTTP调用
+作业提交接口调用
+POST https://dashscope.aliyuncs.com/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding
+
+参数详解
+请求参数
+
+
+
+
+
+
+
+传参方式
+
+字段
+
+类型
+
+必选
+
+描述
+
+示例值
+
+Header
+
+Content-Type
+
+String
+
+是
+
+请求类型：application/json 或者text/event-stream（开启 SSE 响应）
+
+application/json
+
+Authorization
+
+String
+
+是
+
+API-Key，例如：Bearer d1**2a
+
+Bearer d1**2a
+
+X-DashScope-WorkSpace
+
+String
+
+否
+
+指明本次调用需要使用的workspace；需要注意的是，对于子账号Apikey调用，此参数为必选项，子账号必须归属于某个workspace才能调用；对于主账号Apikey此项为可选项，添加则使用对应的workspace身份，不添加则使用主账号身份。
+
+ws_QTggmeAxxxxx
+
+Body
+
+model
+
+String
+
+是
+
+指明需要调用的模型，此处使用multimodal-embedding-v1
+
+multimodal-embedding-v1
+
+input.contents[list]
+
+Array
+
+是
+
+contents 列表中包含本次需要进行向量计算的所有内容，并分别以列表形式单独呈现，每一个列表可以分别是图像（image），文本（text）或者视频（video）。
+
+ 
+{
+        "contents": [ 
+            {"text": "通用多模态表征模型"},
+            {"image": "https://xxxx.com/xxx/images/xxx.jpg"},
+            {"video": "https://xxx.com/xxx/video/xxx.mp4"}
+        ]
+    }
+响应参数
+
+
+
+
+
+字段
+
+类型
+
+描述
+
+示例值
+
+output.embedding[]
+
+Array
+
+本次请求的算法输出内容。
+
+ 
+"output": {
+        "embeddings": [
+            {
+                "index": 0,
+                "embedding": [
+                    -0.026611328125,
+                    -0.016571044921875,
+                    -0.02227783203125,
+                    ...
+                ],
+                "type": "text"
+            },
+            {
+                "index": 1,
+                "embedding": [
+                    0.051544189453125,
+                    0.007717132568359375,
+                    0.026611328125,
+                    ...
+                ],
+                "type": "image"
+            },
+            {
+                "index": 2,
+                "embedding": [
+                    -0.0217437744140625,
+                    -0.016448974609375,
+                    0.040679931640625,
+                    ...
+                ],
+                "type": "video"
+            }
+        ]
+    }
+output.embeddings.index
+
+Integer
+
+本结构中的算法结果对应的输入在输入数组中的索引值
+
+output.embeddings.embedding
+
+Array
+
+对应输入下算法输出embedding
+
+output.embeddings.type
+
+String
+
+表示输出embedding的类型, text/image/video
+
+usage.input_tokens
+
+Integer
+
+本次请求输入内容的 Token 数目
+
+ 
+"usage": {
+        "input_tokens": 10,
+        "image_count": 1,
+        "duration": 3.34563
+    }
+usage.image_count
+
+Integer
+
+本次请求输入的图片张数
+
+usage.duration
+
+Integer
+
+本次请求输入的视频帧长
+
+request_id
+
+String
+
+本次请求的系统唯一码
+
+7574ee8f-38a3-4b1e-9280-11c33ab46e51
+
+Curl示例
+ 
+curl --silent --location --request POST 'https://dashscope.aliyuncs.com/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding' \
+--header 'Authorization: Bearer $DASHSCOPE_API_KEY' \
+--header 'Content-Type: application/json' \
+--data '{
+    "model": "multimodal-embedding-v1",
+    "input": {
+        "contents": [ 
+            {"text": "通用多模态表征模型"},
+            {"image": "https://mitalinlp.oss-cn-hangzhou.aliyuncs.com/dingkun/images/1712648554702.jpg"},
+            {"video": "https://help-static-aliyun-doc.aliyuncs.com/file-manage-files/zh-CN/20250107/lbcemt/new+video.mp4"}
+        ]
+    },
+    "parameters": {
+    }
+}'
+响应示例
+调用成功示例
+
+ 
+{
+    "output": {
+        "embeddings": [
+            {
+                "index": 0,
+                "embedding": [
+                    -0.026611328125,
+                    -0.016571044921875,
+                    -0.02227783203125,
+                    ...
+                ],
+                "type": "text"
+            },
+            {
+                "index": 1,
+                "embedding": [
+                    0.051544189453125,
+                    0.007717132568359375,
+                    0.026611328125,
+                    ...
+                ],
+                "type": "image"
+            },
+            {
+                "index": 2,
+                "embedding": [
+                    -0.0217437744140625,
+                    -0.016448974609375,
+                    0.040679931640625,
+                    ...
+                ],
+                "type": "video"
+            }
+        ]
+    },
+    "usage": {
+        "input_tokens": 10,
+        "image_count": 1,
+        "duration": 3.34563
+    },
+    "request_id": "1fff9502-a6c5-9472-9ee1-73930fdd04c5"
+}
+调用异常示例
+
+在访问请求出错的情况下，输出的结果中会通过code和 message 指明出错原因。
+
+ 
+{
+    "code":"InvalidApiKey",
+    "message":"Invalid API-key provided.",
+    "request_id":"fb53c4ec-1c12-4fc4-a580-cdb7c3261fc1"
+}
+错误码
+如果模型调用失败并返回报错信息，请参见错误信息进行解决。
+``
