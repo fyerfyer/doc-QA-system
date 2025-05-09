@@ -78,6 +78,12 @@ func NewUpdateListener(redisClient *redis.Client, options ...UpdateListenerOptio
 	return listener
 }
 
+// SetDocumentUpdater 设置文档状态更新器
+// 这个方法允许在监听器创建后更改文档状态更新器
+func (l *UpdateListener) SetDocumentUpdater(updater DocumentStatusUpdater) {
+	l.documentUpdater = updater
+}
+
 // Start 开始监听
 func (l *UpdateListener) Start() {
 	l.wg.Add(1)

@@ -19,12 +19,18 @@ type Config struct {
 	Embed     EmbedConfig     `mapstructure:"embed"`
 	Cache     CacheConfig     `mapstructure:"cache"`
 	TaskQueue TaskQueueConfig `mapstructure:"taskqueue"` // 任务队列配置
+	Database  DatabaseConfig  `mapstructure:"database"`  // 数据库配置
 }
 
 // ServerConfig 服务器配置
 type ServerConfig struct {
-	Host string `mapstructure:"host"` // 服务器主机
-	Port int    `mapstructure:"port"` // 服务器端口
+	Host         string `mapstructure:"host"`          // 服务器主机
+	Port         int    `mapstructure:"port"`          // 服务器端口
+	Debug        bool   `mapstructure:"debug"`         // 是否为调试模式
+	LogLevel     string `mapstructure:"log_level"`     // 日志级别
+	ReadTimeout  int    `mapstructure:"read_timeout"`  // 读取超时（秒）
+	WriteTimeout int    `mapstructure:"write_timeout"` // 写入超时（秒）
+	IdleTimeout  int    `mapstructure:"idle_timeout"`  // 空闲超时（秒）
 }
 
 // StorageConfig 存储配置
@@ -40,28 +46,33 @@ type StorageConfig struct {
 
 // VectorDBConfig 向量数据库配置
 type VectorDBConfig struct {
-	Type     string `mapstructure:"type"`     // 向量数据库类型：faiss 或 qdrant
-	Path     string `mapstructure:"path"`     // 数据库文件路径或服务器地址
-	Dim      int    `mapstructure:"dim"`      // 向量维度
-	Distance string `mapstructure:"distance"` // 距离度量方式：cosine, l2, dot
+	Type       string  `mapstructure:"type"`       // 向量数据库类型：faiss 或 qdrant
+	Path       string  `mapstructure:"path"`       // 数据库文件路径或服务器地址
+	Dim        int     `mapstructure:"dim"`        // 向量维度
+	Distance   string  `mapstructure:"distance"`   // 距离度量方式：cosine, l2, dot
+	MinScore   float64 `mapstructure:"min_score"`  // 检索最低分数
+	MaxResults int     `mapstructure:"max_results"` // 最大检索结果数
 }
 
 // LLMConfig 大语言模型配置
 type LLMConfig struct {
-	Provider  string `mapstructure:"provider"`   // 提供商：openai, ollama, etc
-	Model     string `mapstructure:"model"`      // 模型名称
-	APIKey    string `mapstructure:"api_key"`    // API密钥
-	Endpoint  string `mapstructure:"endpoint"`   // API端点
-	MaxTokens int    `mapstructure:"max_tokens"` // 最大生成token数量
+	Provider    string  `mapstructure:"provider"`    // 提供商：openai, ollama, etc
+	Model       string  `mapstructure:"model"`       // 模型名称
+	APIKey      string  `mapstructure:"api_key"`     // API密钥
+	Endpoint    string  `mapstructure:"endpoint"`    // API端点
+	MaxTokens   int     `mapstructure:"max_tokens"`  // 最大生成token数量
+	Temperature float64 `mapstructure:"temperature"` // 采样温度
 }
 
 // EmbedConfig 向量嵌入模型配置
 type EmbedConfig struct {
-	Provider  string `mapstructure:"provider"`   // 提供商：openai, local, etc
-	Model     string `mapstructure:"model"`      // 模型名称
-	APIKey    string `mapstructure:"api_key"`    // API密钥（如果需要）
-	Endpoint  string `mapstructure:"endpoint"`   // API端点
-	BatchSize int    `mapstructure:"batch_size"` // 批处理大小
+	Provider     string `mapstructure:"provider"`     // 提供商：openai, local, etc
+	Model        string `mapstructure:"model"`        // 模型名称
+	APIKey       string `mapstructure:"api_key"`      // API密钥（如果需要）
+	Endpoint     string `mapstructure:"endpoint"`     // API端点
+	BatchSize    int    `mapstructure:"batch_size"`   // 批处理大小
+	ChunkSize    int    `mapstructure:"chunk_size"`   // 文本分块大小
+	ChunkOverlap int    `mapstructure:"chunk_overlap"` // 分块重叠大小
 }
 
 // CacheConfig 缓存配置
@@ -92,6 +103,12 @@ type TaskQueueConfig struct {
 type PythonTasksConfig struct {
 	DocumentProcess bool `mapstructure:"document_process"` // 启用文档处理任务
 	EmbeddingGen    bool `mapstructure:"embedding_gen"`    // 启用嵌入生成任务
+}
+
+// DatabaseConfig 数据库配置
+type DatabaseConfig struct {
+	Type string `mapstructure:"type"` // 数据库类型：sqlite, mysql, postgres
+	Path string `mapstructure:"path"` // 数据库文件路径或连接字符串
 }
 
 // Load 从文件和环境变量加载配置
@@ -149,6 +166,11 @@ func setDefaults(v *viper.Viper) {
 	// 服务器默认配置
 	v.SetDefault("server.host", "0.0.0.0")
 	v.SetDefault("server.port", 8080)
+	v.SetDefault("server.debug", true)
+	v.SetDefault("server.log_level", "info")
+	v.SetDefault("server.read_timeout", 30)
+	v.SetDefault("server.write_timeout", 30)
+	v.SetDefault("server.idle_timeout", 60)
 
 	// 存储默认配置
 	v.SetDefault("storage.type", "local")
@@ -161,18 +183,23 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("vectordb.path", "./vectordb")
 	v.SetDefault("vectordb.dim", 1536) // OpenAI embedding 维度
 	v.SetDefault("vectordb.distance", "cosine")
+	v.SetDefault("vectordb.min_score", 0.5)
+	v.SetDefault("vectordb.max_results", 5)
 
 	// LLM默认配置
 	v.SetDefault("llm.provider", "openai")
 	v.SetDefault("llm.model", "gpt-3.5-turbo")
 	v.SetDefault("llm.endpoint", "https://api.openai.com/v1")
 	v.SetDefault("llm.max_tokens", 1000)
+	v.SetDefault("llm.temperature", 0.7)
 
 	// Embedding默认配置
 	v.SetDefault("embed.provider", "openai")
 	v.SetDefault("embed.model", "text-embedding-3-small")
 	v.SetDefault("embed.endpoint", "https://api.openai.com/v1")
 	v.SetDefault("embed.batch_size", 10)
+	v.SetDefault("embed.chunk_size", 1000)
+	v.SetDefault("embed.chunk_overlap", 200)
 
 	// 缓存默认配置
 	v.SetDefault("cache.enable", true)
@@ -196,4 +223,8 @@ func setDefaults(v *viper.Viper) {
 	// Python任务配置
 	v.SetDefault("taskqueue.python_tasks.document_process", true)
 	v.SetDefault("taskqueue.python_tasks.embedding_gen", true)
+
+	// 数据库配置
+	v.SetDefault("database.type", "sqlite")
+	v.SetDefault("database.path", "./data/database.db")
 }

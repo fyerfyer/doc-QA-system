@@ -16,12 +16,65 @@ services:
       - LOG_LEVEL=info
       - LOG_OUTPUT=both
       - LOG_DIR=/app/logs
+      # 任务队列和Redis配置
+      - TASKQUEUE_ENABLE=true
+      - TASKQUEUE_TYPE=redis
+      - TASKQUEUE_ADDRESS=redis:6379
+      - TASKQUEUE_PASSWORD=""
+      - TASKQUEUE_DB=1
+      - TASKQUEUE_PREFIX=taskqueue
+      - TASKQUEUE_PYTHON_TASKS_DOCUMENT_PROCESS=true
+      # 缓存配置
+      - CACHE_ENABLE=true
+      - CACHE_TYPE=redis
+      - CACHE_ADDRESS=redis:6379
+      - CACHE_PASSWORD=
+      - CACHE_DB=0
     volumes:
       - docqa-data:/app/data
       - docqa-logs:/app/logs
     ports:
       - "8080:8080"
     restart: unless-stopped
+    depends_on:
+      - redis
+      - py-worker
+    networks:
+      - docqa-network
+
+  py-worker:
+    build:
+      context: ./py-services
+      dockerfile: Dockerfile
+    container_name: docqa-py-worker
+    environment:
+      - DASHSCOPE_API_KEY=${TONGYI_API_KEY}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=
+      - REDIS_DB=1
+      - CHUNKER_SIZE=1000
+      - CHUNKER_OVERLAP=200
+      - EMBEDDING_MODEL=text-embedding-v3
+      - EMBEDDING_DIMENSION=1024
+      - LOG_LEVEL=INFO
+    volumes:
+      - docqa-data:/app/data:ro  # 只读访问，文件由Go服务上传
+    restart: unless-stopped
+    depends_on:
+      - redis
+    networks:
+      - docqa-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: docqa-redis
+    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    networks:
+      - docqa-network
 
   frontend:
     build:
@@ -33,9 +86,17 @@ services:
     depends_on:
       - backend
     restart: unless-stopped
+    networks:
+      - docqa-network
 
 volumes:
   docqa-data:
     driver: local
-  docqa-logs:                         # 添加日志卷
+  docqa-logs:
     driver: local
+  redis-data:
+    driver: local
+
+networks:
+  docqa-network:
+    driver: bridge

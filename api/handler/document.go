@@ -9,8 +9,8 @@ import (
 
 	"github.com/fyerfyer/doc-QA-system/api/middleware"
 	"github.com/fyerfyer/doc-QA-system/api/model"
+	"github.com/fyerfyer/doc-QA-system/internal/adapters"
 	"github.com/fyerfyer/doc-QA-system/internal/models"
-	"github.com/fyerfyer/doc-QA-system/internal/services"
 	"github.com/fyerfyer/doc-QA-system/pkg/storage"
 	"github.com/gin-gonic/gin"
 	"github.com/sirupsen/logrus"
@@ -18,13 +18,13 @@ import (
 
 // DocumentHandler 处理文档相关的API请求
 type DocumentHandler struct {
-	documentService *services.DocumentService // 文档服务
-	fileStorage     storage.Storage           // 文件存储服务
-	logger          *logrus.Logger            // 日志记录器
+	documentService adapters.DocumentProcessingService // 文档服务
+	fileStorage     storage.Storage                    // 文件存储服务
+	logger          *logrus.Logger                     // 日志记录器
 }
 
-// NewDocumentHandler 创建新的文档处理器
-func NewDocumentHandler(documentService *services.DocumentService, fileStorage storage.Storage) *DocumentHandler {
+// NewDocumentHandler 修改NewDocumentHandler函数来接受任何DocumentProcessingService接口
+func NewDocumentHandler(documentService adapters.DocumentProcessingService, fileStorage storage.Storage) *DocumentHandler {
 	return &DocumentHandler{
 		documentService: documentService,
 		fileStorage:     fileStorage,
