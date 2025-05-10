@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  # Redis 服务 - 用于任务队列和缓存
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"  # 使用默认端口，测试代码直接连接
+    volumes:
+      - redis-test-data:/data
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+    networks:
+      - test-network
+
+  # Redis Commander - Redis管理UI，方便调试
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    environment:
+      - REDIS_HOSTS=local:redis:6379
+    ports:
+      - "8081:8081"
+    depends_on:
+      - redis
+    networks:
+      - test-network
+
+networks:
+  test-network:
+    driver: bridge
+
+volumes:
+  redis-test-data:

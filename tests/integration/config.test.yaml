@@ -1,0 +1,67 @@
+# 测试环境配置
+
+server:
+  host: "0.0.0.0"
+  port: 8080
+  debug: true
+  log_level: "debug"  # 测试时使用详细日志
+  read_timeout: 30
+  write_timeout: 30
+  idle_timeout: 60
+
+storage:
+  type: "local"
+  path: "./test_uploads"  # 使用专用测试目录
+  bucket: "test-docqa"
+  use_ssl: false
+
+vectordb:
+  type: "faiss"
+  path: "./test_vectordb"  # 使用专用测试目录
+  dim: 1536
+  distance: "cosine"
+  min_score: 0.5
+  max_results: 5
+
+llm:
+  provider: "tongyi"  # 通义千问
+  model: "qwen-max"
+  api_key: "${TONGYI_API_KEY}"  # 使用环境变量获取密钥
+  endpoint: "https://dashscope.aliyuncs.com/api/v1/services/aigc"
+  max_tokens: 1000
+  temperature: 0.7
+
+embed:
+  provider: "tongyi"
+  model: "text-embedding-v3"
+  api_key: "${TONGYI_API_KEY}"  # 使用环境变量获取密钥
+  endpoint: "https://dashscope.aliyuncs.com/api/v1/services/embedding"
+  batch_size: 6  # 通义千问v3模型批量处理限制为6
+  chunk_size: 1000
+  chunk_overlap: 200
+
+cache:
+  enable: true
+  type: "redis"
+  address: "localhost:6379"  # 使用本地Redis测试容器
+  password: ""
+  db: 0
+  ttl: 300  # 测试环境缓存时间较短(5分钟)
+
+taskqueue:
+  enable: true
+  type: "redis"
+  address: "localhost:6379"
+  password: ""
+  db: 1  # 使用不同的数据库避免与缓存冲突
+  prefix: "test_taskqueue:"  # 使用测试专用前缀
+  max_retries: 2  # 测试环境重试次数较少
+  timeout: 15  # 测试环境超时时间较短
+  monitor_freq: 2  # 测试环境监控频率较高
+  python_tasks:
+    document_process: true
+    embedding_gen: true
+
+database:
+  type: "sqlite"
+  path: "./test_data/test_database.db"  # 使用测试专用数据库文件
