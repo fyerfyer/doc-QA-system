@@ -8,18 +8,22 @@ import (
 
 	"github.com/fyerfyer/doc-QA-system/internal/database"
 	"github.com/fyerfyer/doc-QA-system/internal/models"
+	"github.com/fyerfyer/doc-QA-system/pkg/taskqueue"
 	"gorm.io/gorm"
 )
 
 // docRepository 文档仓储实现
 type docRepository struct {
-	db *gorm.DB // 数据库连接
+	db        *gorm.DB        // 数据库连接
+	taskQueue taskqueue.Queue // 任务队列
+	ctx       context.Context // 上下文，可用于事务或超时控制
 }
 
 // NewDocumentRepository 创建文档仓储实例
 func NewDocumentRepository() DocumentRepository {
 	return &docRepository{
-		db: database.MustDB(),
+		db:  database.MustDB(),
+		ctx: context.Background(),
 	}
 }
 
@@ -29,7 +33,20 @@ func NewDocumentRepositoryWithDB(db *gorm.DB) DocumentRepository {
 		db = database.MustDB()
 	}
 	return &docRepository{
-		db: db,
+		db:  db,
+		ctx: context.Background(),
+	}
+}
+
+// NewDocumentRepositoryWithQueue 使用指定的数据库连接和任务队列创建文档仓储实例
+func NewDocumentRepositoryWithQueue(db *gorm.DB, queue taskqueue.Queue) DocumentRepository {
+	if db == nil {
+		db = database.MustDB()
+	}
+	return &docRepository{
+		db:        db,
+		taskQueue: queue,
+		ctx:       context.Background(),
 	}
 }
 
@@ -149,6 +166,18 @@ func (r *docRepository) Delete(id string) error {
 			return err
 		}
 
+		// 3. 如果任务队列已初始化，尝试获取并删除相关任务
+		if r.taskQueue != nil {
+			ctx := r.getContext()
+			tasks, err := r.taskQueue.GetTasksByDocument(ctx, id)
+			if err == nil && len(tasks) > 0 {
+				for _, task := range tasks {
+					// 忽略错误，因为任务可能已经被删除
+					_ = r.taskQueue.DeleteTask(ctx, task.ID)
+				}
+			}
+		}
+
 		return nil
 	})
 }
@@ -199,6 +228,19 @@ func (r *docRepository) SaveSegment(segment *models.DocumentSegment) error {
 	return r.db.Create(segment).Error
 }
 
+// SaveSegments 批量保存段落
+func (r *docRepository) SaveSegments(segments []*models.DocumentSegment) error {
+	if len(segments) == 0 {
+		return nil
+	}
+
+	// 使用事务批量插入
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		// 批量创建记录
+		return tx.CreateInBatches(segments, 100).Error
+	})
+}
+
 // GetSegments 获取文档的所有段落
 func (r *docRepository) GetSegments(docID string) ([]*models.DocumentSegment, error) {
 	var segments []*models.DocumentSegment
@@ -224,22 +266,124 @@ func (r *docRepository) DeleteSegments(docID string) error {
 }
 
 // WithContext 创建带有上下文的仓储
-// 可用于事务处理或超时控制
 func (r *docRepository) WithContext(ctx context.Context) DocumentRepository {
 	return &docRepository{
-		db: r.db.WithContext(ctx),
+		db:        r.db.WithContext(ctx),
+		taskQueue: r.taskQueue,
+		ctx:       ctx,
 	}
 }
 
-// 批量保存段落
-func (r *docRepository) SaveSegments(segments []*models.DocumentSegment) error {
-	if len(segments) == 0 {
-		return nil
+// getContext 获取仓储的上下文，如果未设置则使用背景上下文
+func (r *docRepository) getContext() context.Context {
+	if r.ctx != nil {
+		return r.ctx
+	}
+	return context.Background()
+}
+
+// GetDocumentTasks 获取文档相关的所有任务
+func (r *docRepository) GetDocumentTasks(ctx context.Context, documentID string) ([]*taskqueue.Task, error) {
+	if r.taskQueue == nil {
+		return nil, errors.New("task queue not initialized")
 	}
 
-	// 使用事务批量插入
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		// 批量创建记录
-		return tx.CreateInBatches(segments, 100).Error
-	})
+	return r.taskQueue.GetTasksByDocument(ctx, documentID)
+}
+
+// GetTaskByID 根据ID获取任务
+func (r *docRepository) GetTaskByID(ctx context.Context, taskID string) (*taskqueue.Task, error) {
+	if r.taskQueue == nil {
+		return nil, errors.New("task queue not initialized")
+	}
+
+	return r.taskQueue.GetTask(ctx, taskID)
+}
+
+// CreateTask 创建任务并关联到文档
+func (r *docRepository) CreateTask(ctx context.Context, taskType taskqueue.TaskType, documentID string, payload interface{}) (string, error) {
+	if r.taskQueue == nil {
+		return "", errors.New("task queue not initialized")
+	}
+
+	// 检查文档是否存在
+	_, err := r.GetByID(documentID)
+	if err != nil {
+		return "", err
+	}
+
+	// 将任务加入队列
+	taskID, err := r.taskQueue.Enqueue(ctx, taskType, documentID, payload)
+	if err != nil {
+		return "", fmt.Errorf("failed to enqueue task: %w", err)
+	}
+
+	// 更新文档状态为处理中
+	err = r.UpdateStatus(documentID, models.DocStatusProcessing, "")
+	if err != nil {
+		// 记录错误但继续，因为任务已创建
+		fmt.Printf("Failed to update document status: %v\n", err)
+	}
+
+	return taskID, nil
+}
+
+// UpdateTaskStatus 更新任务状态
+func (r *docRepository) UpdateTaskStatus(ctx context.Context, taskID string, status taskqueue.TaskStatus, result interface{}, errorMsg string) error {
+	if r.taskQueue == nil {
+		return errors.New("task queue not initialized")
+	}
+
+	// 获取任务信息
+	task, err := r.taskQueue.GetTask(ctx, taskID)
+	if err != nil {
+		return err
+	}
+
+	// 更新任务状态
+	if err := r.taskQueue.UpdateTaskStatus(ctx, taskID, status, result, errorMsg); err != nil {
+		return fmt.Errorf("failed to update task status: %w", err)
+	}
+
+	// 通知任务状态更新
+	if err := r.taskQueue.NotifyTaskUpdate(ctx, taskID); err != nil {
+		// 记录错误但继续，通知失败不是致命错误
+		fmt.Printf("Failed to notify task update: %v\n", err)
+	}
+
+	// 根据任务状态更新文档状态
+	if task.DocumentID != "" {
+		var docStatus models.DocumentStatus
+		var docError string
+
+		switch status {
+		case taskqueue.StatusCompleted:
+			docStatus = models.DocStatusCompleted
+		case taskqueue.StatusFailed:
+			docStatus = models.DocStatusFailed
+			docError = errorMsg
+		case taskqueue.StatusProcessing:
+			docStatus = models.DocStatusProcessing
+		default:
+			// 对于其他状态，不更新文档状态
+			return nil
+		}
+
+		// 更新文档状态
+		err = r.UpdateStatus(task.DocumentID, docStatus, docError)
+		if err != nil {
+			return fmt.Errorf("failed to update document status: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// DeleteTask 删除任务
+func (r *docRepository) DeleteTask(ctx context.Context, taskID string) error {
+	if r.taskQueue == nil {
+		return errors.New("task queue not initialized")
+	}
+
+	return r.taskQueue.DeleteTask(ctx, taskID)
 }

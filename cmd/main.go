@@ -16,6 +16,7 @@ import (
 	"github.com/fyerfyer/doc-QA-system/api/middleware"
 
 	"github.com/fyerfyer/doc-QA-system/api/handler"
+	qaconfig "github.com/fyerfyer/doc-QA-system/config"
 	"github.com/fyerfyer/doc-QA-system/internal/cache"
 	"github.com/fyerfyer/doc-QA-system/internal/database"
 	"github.com/fyerfyer/doc-QA-system/internal/document"
@@ -25,6 +26,7 @@ import (
 	"github.com/fyerfyer/doc-QA-system/internal/services"
 	"github.com/fyerfyer/doc-QA-system/internal/vectordb"
 	"github.com/fyerfyer/doc-QA-system/pkg/storage"
+	"github.com/fyerfyer/doc-QA-system/pkg/taskqueue"
 	"github.com/gin-gonic/gin"
 	"github.com/sirupsen/logrus"
 )
@@ -46,11 +48,34 @@ type config struct {
 	ReadTimeout     time.Duration // 读取超时
 	WriteTimeout    time.Duration // 写入超时
 	DataDir         string        // 数据目录路径
+	ConfigFile      string        // 配置文件路径
+	// 任务队列相关配置
+	QueueEnabled     bool          // 是否启用任务队列
+	QueueType        string        // 任务队列类型
+	RedisAddr        string        // Redis 地址
+	RedisPassword    string        // Redis 密码
+	RedisDB          int           // Redis 数据库编号
+	QueueConcurrency int           // 任务队列处理并发数
+	QueueRetryLimit  int           // 任务重试次数
+	QueueRetryDelay  time.Duration // 任务重试延迟
 }
 
 func main() {
 	// 解析命令行参数
 	cfg := parseFlags()
+
+	// 加载配置文件(如果指定)
+	var appConfig *qaconfig.Config
+	var err error
+	if cfg.ConfigFile != "" {
+		appConfig, err = qaconfig.Load(cfg.ConfigFile)
+		if err != nil {
+			log.Printf("Warning: Failed to load config file: %v, using command line args", err)
+		} else {
+			// 使用配置文件中的值更新相关设置
+			updateConfigFromFile(&cfg, appConfig)
+		}
+	}
 
 	// 设置Gin模式
 	gin.SetMode(cfg.Mode)
@@ -95,6 +120,17 @@ func main() {
 		logger.Fatalf("Failed to initialize cache: %v", err)
 	}
 
+	// 初始化任务队列（如果启用）
+	var queue taskqueue.Queue
+	if cfg.QueueEnabled {
+		queue, err = setupTaskQueue(cfg, logger)
+		if err != nil {
+			logger.Fatalf("Failed to initialize task queue: %v", err)
+		}
+		defer queue.Close()
+		logger.Info("Task queue initialized successfully")
+	}
+
 	// 创建文本分段器
 	splitter := document.NewTextSplitter(document.SplitterConfig{
 		SplitType:    document.ByParagraph,
@@ -109,8 +145,33 @@ func main() {
 	)
 
 	// 初始化业务服务
-	repo := repository.NewDocumentRepository()
+	var repo repository.DocumentRepository
+	if queue != nil {
+		// 如果启用了任务队列，使用带队列的仓储
+		repo = repository.NewDocumentRepositoryWithQueue(database.MustDB(), queue)
+		logger.Info("Using document repository with task queue")
+	} else {
+		repo = repository.NewDocumentRepository()
+	}
+
 	statusManager := services.NewDocumentStatusManager(repo, logger)
+
+	// 创建文档服务，根据是否启用队列进行配置
+	documentServiceOptions := []services.DocumentOption{
+		services.WithDocumentRepository(repo),
+		services.WithStatusManager(statusManager),
+		services.WithBatchSize(16),
+		services.WithLogger(logger),
+	}
+
+	// 如果启用了队列，添加相关选项
+	if queue != nil {
+		documentServiceOptions = append(documentServiceOptions,
+			services.WithTaskQueue(queue),
+			services.WithAsyncProcessing(true),
+		)
+		logger.Info("Document processing will use async task queue")
+	}
 
 	documentService := services.NewDocumentService(
 		fileStorage,
@@ -118,8 +179,7 @@ func main() {
 		splitter,
 		embeddingClient,
 		vectorDB,
-		services.WithStatusManager(statusManager),
-		services.WithBatchSize(16),
+		documentServiceOptions...,
 	)
 
 	qaService := services.NewQAService(
@@ -209,6 +269,19 @@ func parseFlags() config {
 	// 数据目录配置
 	flag.StringVar(&cfg.DataDir, "data-dir", "./data", "Data directory path")
 
+	// 配置文件
+	flag.StringVar(&cfg.ConfigFile, "config", "", "Path to config file")
+
+	// 任务队列配置
+	flag.BoolVar(&cfg.QueueEnabled, "queue", false, "Enable task queue")
+	flag.StringVar(&cfg.QueueType, "queue-type", "redis", "Task queue type (redis)")
+	flag.StringVar(&cfg.RedisAddr, "redis-addr", "localhost:6379", "Redis address for task queue")
+	flag.StringVar(&cfg.RedisPassword, "redis-password", "", "Redis password")
+	flag.IntVar(&cfg.RedisDB, "redis-db", 0, "Redis database number")
+	flag.IntVar(&cfg.QueueConcurrency, "queue-concurrency", 10, "Task queue concurrency")
+	flag.IntVar(&cfg.QueueRetryLimit, "queue-retry", 3, "Max retry attempts for failed tasks")
+	flag.DurationVar(&cfg.QueueRetryDelay, "queue-retry-delay", time.Minute, "Delay between retry attempts")
+
 	// 从环境变量获取API密钥（优先级高于命令行参数）
 	if key := os.Getenv("TONGYI_API_KEY"); key != "" {
 		cfg.EmbeddingAPIKey = key
@@ -220,9 +293,46 @@ func parseFlags() config {
 	if key := os.Getenv("LLM_API_KEY"); key != "" {
 		cfg.LLMAPIKey = key
 	}
+	if redisAddr := os.Getenv("REDIS_ADDR"); redisAddr != "" {
+		cfg.RedisAddr = redisAddr
+	}
+	if redisPassword := os.Getenv("REDIS_PASSWORD"); redisPassword != "" {
+		cfg.RedisPassword = redisPassword
+	}
 
 	flag.Parse()
 	return cfg
+}
+
+// updateConfigFromFile 从配置文件更新命令行参数
+func updateConfigFromFile(cfg *config, appConfig *qaconfig.Config) {
+	// 只更新未在命令行上明确设置的参数
+
+	// 任务队列配置
+	if flag.Lookup("queue").DefValue == fmt.Sprint(cfg.QueueEnabled) {
+		cfg.QueueEnabled = appConfig.Queue.Enable
+	}
+	if flag.Lookup("queue-type").DefValue == cfg.QueueType {
+		cfg.QueueType = appConfig.Queue.Type
+	}
+	if flag.Lookup("redis-addr").DefValue == cfg.RedisAddr {
+		cfg.RedisAddr = appConfig.Queue.RedisAddr
+	}
+	if flag.Lookup("redis-password").DefValue == cfg.RedisPassword {
+		cfg.RedisPassword = appConfig.Queue.RedisPassword
+	}
+	if flag.Lookup("redis-db").DefValue == fmt.Sprint(cfg.RedisDB) {
+		cfg.RedisDB = appConfig.Queue.RedisDB
+	}
+	if flag.Lookup("queue-concurrency").DefValue == fmt.Sprint(cfg.QueueConcurrency) {
+		cfg.QueueConcurrency = appConfig.Queue.Concurrency
+	}
+	if flag.Lookup("queue-retry").DefValue == fmt.Sprint(cfg.QueueRetryLimit) {
+		cfg.QueueRetryLimit = appConfig.Queue.RetryLimit
+	}
+	if appConfig.Queue.RetryDelay > 0 {
+		cfg.QueueRetryDelay = time.Duration(appConfig.Queue.RetryDelay) * time.Second
+	}
 }
 
 // setupLogger 设置日志系统
@@ -329,11 +439,8 @@ func setupCache(cfg config) (cache.Cache, error) {
 
 	// 如果配置了Redis，添加Redis配置
 	if cfg.CacheType == "redis" {
-		cacheConfig.RedisAddr = os.Getenv("REDIS_ADDR")
-		if cacheConfig.RedisAddr == "" {
-			cacheConfig.RedisAddr = "localhost:6379"
-		}
-		cacheConfig.RedisPassword = os.Getenv("REDIS_PASSWORD")
+		cacheConfig.RedisAddr = cfg.RedisAddr
+		cacheConfig.RedisPassword = cfg.RedisPassword
 		// Redis数据库编号默认为0
 	}
 
@@ -356,4 +463,35 @@ func setupDatabase(cfg config, logger *logrus.Logger) error {
 	}
 
 	return database.Setup(dbConfig, logger)
+}
+
+// setupTaskQueue 设置任务队列
+func setupTaskQueue(cfg config, logger *logrus.Logger) (taskqueue.Queue, error) {
+	if !cfg.QueueEnabled {
+		return nil, nil
+	}
+
+	// 根据配置创建任务队列
+	queueConfig := &taskqueue.Config{
+		RedisAddr:     cfg.RedisAddr,
+		RedisPassword: cfg.RedisPassword,
+		RedisDB:       cfg.RedisDB,
+		Concurrency:   cfg.QueueConcurrency,
+		RetryLimit:    cfg.QueueRetryLimit,
+		RetryDelay:    cfg.QueueRetryDelay,
+	}
+
+	logger.WithFields(logrus.Fields{
+		"type":        cfg.QueueType,
+		"redis_addr":  cfg.RedisAddr,
+		"concurrency": cfg.QueueConcurrency,
+		"retry_limit": cfg.QueueRetryLimit,
+	}).Info("Setting up task queue")
+
+	queue, err := taskqueue.NewQueue(cfg.QueueType, queueConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	return queue, nil
 }

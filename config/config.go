@@ -18,6 +18,7 @@ type Config struct {
 	LLM      LLMConfig      `mapstructure:"llm"`
 	Embed    EmbedConfig    `mapstructure:"embed"`
 	Cache    CacheConfig    `mapstructure:"cache"`
+	Queue    QueueConfig    `mapstructure:"queue"` // 新增队列配置
 }
 
 // ServerConfig 服务器配置
@@ -71,6 +72,18 @@ type CacheConfig struct {
 	Password string `mapstructure:"password"` // Redis密码
 	DB       int    `mapstructure:"db"`       // Redis数据库
 	TTL      int    `mapstructure:"ttl"`      // 缓存TTL（秒）
+}
+
+// QueueConfig 任务队列配置
+type QueueConfig struct {
+	Enable        bool   `mapstructure:"enable"`         // 是否启用任务队列
+	Type          string `mapstructure:"type"`           // 队列类型：redis 或 memory
+	RedisAddr     string `mapstructure:"redis_addr"`     // Redis地址
+	RedisPassword string `mapstructure:"redis_password"` // Redis密码
+	RedisDB       int    `mapstructure:"redis_db"`       // Redis数据库编号
+	Concurrency   int    `mapstructure:"concurrency"`    // 任务处理并发数
+	RetryLimit    int    `mapstructure:"retry_limit"`    // 任务最大重试次数
+	RetryDelay    int    `mapstructure:"retry_delay"`    // 重试延迟(秒)
 }
 
 // Load 从文件和环境变量加载配置
@@ -157,4 +170,13 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("cache.enable", true)
 	v.SetDefault("cache.type", "memory")
 	v.SetDefault("cache.ttl", 3600) // 1小时
+
+	// 队列默认配置
+	v.SetDefault("queue.enable", false)
+	v.SetDefault("queue.type", "redis")
+	v.SetDefault("queue.redis_addr", "localhost:6379")
+	v.SetDefault("queue.redis_db", 0)
+	v.SetDefault("queue.concurrency", 10)
+	v.SetDefault("queue.retry_limit", 3)
+	v.SetDefault("queue.retry_delay", 60) // 60秒
 }

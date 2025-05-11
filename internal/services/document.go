@@ -14,6 +14,7 @@ import (
 	"github.com/fyerfyer/doc-QA-system/internal/repository"
 	"github.com/fyerfyer/doc-QA-system/internal/vectordb"
 	"github.com/fyerfyer/doc-QA-system/pkg/storage"
+	"github.com/fyerfyer/doc-QA-system/pkg/taskqueue"
 	"github.com/sirupsen/logrus"
 )
 
@@ -27,6 +28,8 @@ type DocumentService struct {
 	vectorDB      vectordb.Repository           // 向量数据库
 	repo          repository.DocumentRepository // 文档元数据存储
 	statusManager *DocumentStatusManager        // 文档状态管理器
+	taskQueue     taskqueue.Queue               // 任务队列
+	asyncEnabled  bool                          // 是否启用异步处理
 	batchSize     int                           // 批处理大小
 	timeout       time.Duration                 // 处理超时时间
 	logger        *logrus.Logger                // 日志记录器
@@ -46,14 +49,15 @@ func NewDocumentService(
 ) *DocumentService {
 	// 创建服务实例
 	srv := &DocumentService{
-		storage:   storage,
-		parser:    parser,
-		splitter:  splitter,
-		embedder:  embedder,
-		vectorDB:  vectorDB,
-		batchSize: 16,              // 默认批处理大小
-		timeout:   time.Minute * 5, // 默认超时时间
-		logger:    logrus.New(),    // 默认日志记录器
+		storage:      storage,
+		parser:       parser,
+		splitter:     splitter,
+		embedder:     embedder,
+		vectorDB:     vectorDB,
+		batchSize:    16,              // 默认批处理大小
+		timeout:      time.Minute * 5, // 默认超时时间
+		logger:       logrus.New(),    // 默认日志记录器
+		asyncEnabled: false,           // 默认不启用异步处理
 	}
 
 	// 应用配置选项
@@ -103,6 +107,21 @@ func WithStatusManager(manager *DocumentStatusManager) DocumentOption {
 	}
 }
 
+// WithTaskQueue 设置任务队列
+func WithTaskQueue(queue taskqueue.Queue) DocumentOption {
+	return func(s *DocumentService) {
+		s.taskQueue = queue
+		s.asyncEnabled = queue != nil
+	}
+}
+
+// WithAsyncProcessing 设置是否启用异步处理
+func WithAsyncProcessing(enabled bool) DocumentOption {
+	return func(s *DocumentService) {
+		s.asyncEnabled = enabled
+	}
+}
+
 // Init 初始化文档服务
 // 确保必要的依赖都已设置
 func (s *DocumentService) Init() error {
@@ -139,6 +158,69 @@ func (s *DocumentService) ProcessDocument(ctx context.Context, fileID string, fi
 		return errors.New("filePath cannot be empty")
 	}
 
+	// 如果启用异步处理并且任务队列已配置，使用任务队列处理
+	if s.asyncEnabled && s.taskQueue != nil {
+		return s.processDocumentAsync(ctx, fileID, filePath)
+	}
+
+	// 否则，使用同步方式处理
+	return s.processDocumentSync(ctx, fileID, filePath)
+}
+
+// processDocumentAsync 异步处理文档
+// 将任务加入队列并立即返回
+func (s *DocumentService) processDocumentAsync(ctx context.Context, fileID string, filePath string) error {
+	s.logger.WithFields(logrus.Fields{
+		"file_id":   fileID,
+		"file_path": filePath,
+	}).Info("Enqueuing document for async processing")
+
+	// 更新文档状态为处理中
+	if err := s.statusManager.MarkAsProcessing(ctx, fileID); err != nil {
+		s.logger.WithError(err).Error("Failed to mark document as processing")
+		// 继续处理，不中断
+	}
+
+	// 创建处理任务载荷
+	fileName := filepath.Base(filePath)
+	fileType := filepath.Ext(fileName)
+	if fileType != "" && fileType[0] == '.' {
+		fileType = fileType[1:] // 去掉开头的点号
+	}
+
+	payload := taskqueue.ProcessCompletePayload{
+		DocumentID: fileID,
+		FilePath:   filePath,
+		FileName:   fileName,
+		FileType:   fileType,
+		ChunkSize:  1000,      // 默认分块大小
+		Overlap:    200,       // 默认重叠大小
+		SplitType:  "text",    // 默认分割类型
+		Model:      "default", // 默认模型
+		Metadata: map[string]string{
+			"source":     "api",
+			"created_by": "document_service",
+		},
+	}
+
+	// 创建任务
+	taskID, err := s.repo.CreateTask(ctx, taskqueue.TaskProcessComplete, fileID, payload)
+	if err != nil {
+		s.failDocument(ctx, fileID, fmt.Sprintf("failed to create processing task: %v", err))
+		return fmt.Errorf("failed to create processing task: %w", err)
+	}
+
+	s.logger.WithFields(logrus.Fields{
+		"file_id": fileID,
+		"task_id": taskID,
+	}).Info("Document processing task created successfully")
+
+	return nil
+}
+
+// processDocumentSync 同步处理文档
+// 直接在当前进程中处理文档
+func (s *DocumentService) processDocumentSync(ctx context.Context, fileID string, filePath string) error {
 	// 设置上下文超时
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
@@ -357,6 +439,18 @@ func (s *DocumentService) DeleteDocument(ctx context.Context, fileID string) err
 		return fmt.Errorf("failed to delete document status record: %w", err)
 	}
 
+	// 4. 如果任务队列已配置，删除相关任务
+	if s.taskQueue != nil {
+		tasks, err := s.repo.GetDocumentTasks(ctx, fileID)
+		if err == nil && len(tasks) > 0 {
+			for _, task := range tasks {
+				if err := s.repo.DeleteTask(ctx, task.ID); err != nil {
+					s.logger.WithError(err).WithField("task_id", task.ID).Warn("Failed to delete document task")
+				}
+			}
+		}
+	}
+
 	s.logger.WithField("file_id", fileID).Info("Document deleted successfully")
 	return nil
 }
@@ -400,7 +494,136 @@ func (s *DocumentService) GetDocumentInfo(ctx context.Context, fileID string) (m
 		info["tags"] = doc.Tags
 	}
 
+	// 如果启用了异步处理，尝试获取相关任务信息
+	if s.asyncEnabled && s.taskQueue != nil {
+		tasks, err := s.repo.GetDocumentTasks(ctx, fileID)
+		if err == nil && len(tasks) > 0 {
+			// 添加最近的任务信息
+			latestTask := tasks[0]
+			for _, task := range tasks {
+				if task.UpdatedAt.After(latestTask.UpdatedAt) {
+					latestTask = task
+				}
+			}
+
+			info["task_id"] = latestTask.ID
+			info["task_status"] = latestTask.Status
+			info["task_created_at"] = latestTask.CreatedAt.Format(time.RFC3339)
+			info["task_updated_at"] = latestTask.UpdatedAt.Format(time.RFC3339)
+
+			if latestTask.StartedAt != nil {
+				info["task_started_at"] = latestTask.StartedAt.Format(time.RFC3339)
+			}
+			if latestTask.CompletedAt != nil {
+				info["task_completed_at"] = latestTask.CompletedAt.Format(time.RFC3339)
+			}
+			if latestTask.Error != "" {
+				info["task_error"] = latestTask.Error
+			}
+		}
+	}
+
 	return info, nil
+}
+
+// GetDocumentStatus 获取文档处理状态
+func (s *DocumentService) GetDocumentStatus(ctx context.Context, fileID string) (models.DocumentStatus, error) {
+	// 确保初始化完成
+	if err := s.Init(); err != nil {
+		return "", err
+	}
+
+	return s.statusManager.GetStatus(ctx, fileID)
+}
+
+// GetDocumentTasks 获取文档相关的任务
+func (s *DocumentService) GetDocumentTasks(ctx context.Context, fileID string) ([]*taskqueue.Task, error) {
+	// 确保初始化完成
+	if err := s.Init(); err != nil {
+		return nil, err
+	}
+
+	if !s.asyncEnabled || s.taskQueue == nil {
+		return nil, errors.New("async processing not enabled")
+	}
+
+	return s.repo.GetDocumentTasks(ctx, fileID)
+}
+
+// WaitForDocumentProcessing 等待文档处理完成
+func (s *DocumentService) WaitForDocumentProcessing(ctx context.Context, fileID string, timeout time.Duration) error {
+	// 确保初始化完成
+	if err := s.Init(); err != nil {
+		return err
+	}
+
+	if !s.asyncEnabled || s.taskQueue == nil {
+		// 如果未启用异步处理，直接检查文档状态
+		status, err := s.statusManager.GetStatus(ctx, fileID)
+		if err != nil {
+			return err
+		}
+		if status == models.DocStatusFailed {
+			return fmt.Errorf("document processing failed")
+		}
+		if status != models.DocStatusCompleted {
+			return fmt.Errorf("document not processed")
+		}
+		return nil
+	}
+
+	// 设置上下文超时
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+
+	// 获取文档相关的任务
+	tasks, err := s.repo.GetDocumentTasks(ctx, fileID)
+	if err != nil {
+		return fmt.Errorf("failed to get document tasks: %w", err)
+	}
+
+	if len(tasks) == 0 {
+		return fmt.Errorf("no processing tasks found for document %s", fileID)
+	}
+
+	// 找到最新的处理任务
+	var latestTask *taskqueue.Task
+	for _, task := range tasks {
+		if task.Type == taskqueue.TaskProcessComplete {
+			if latestTask == nil || task.CreatedAt.After(latestTask.CreatedAt) {
+				latestTask = task
+			}
+		}
+	}
+
+	if latestTask == nil {
+		return fmt.Errorf("no complete processing task found for document %s", fileID)
+	}
+
+	// 等待任务完成
+	_, err = s.taskQueue.WaitForTask(ctx, latestTask.ID, timeout)
+	if err != nil {
+		return fmt.Errorf("failed to wait for document processing: %w", err)
+	}
+
+	// 再次检查文档状态
+	status, err := s.statusManager.GetStatus(ctx, fileID)
+	if err != nil {
+		return err
+	}
+
+	if status == models.DocStatusFailed {
+		return fmt.Errorf("document processing failed")
+	}
+
+	if status != models.DocStatusCompleted {
+		return fmt.Errorf("document processing incomplete")
+	}
+
+	return nil
 }
 
 // CountDocumentSegments 统计文档段落数量
@@ -463,4 +686,9 @@ func (s *DocumentService) failDocument(ctx context.Context, fileID string, error
 // GetStatusManager 返回文档状态管理器实例
 func (s *DocumentService) GetStatusManager() *DocumentStatusManager {
 	return s.statusManager
+}
+
+// GetTaskQueue 返回任务队列实例
+func (s *DocumentService) GetTaskQueue() taskqueue.Queue {
+	return s.taskQueue
 }
