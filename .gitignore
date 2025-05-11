@@ -31,3 +31,17 @@ go.work.sum
 /cmake-3.26.5
 /faiss
 /logs
+
+# Python bytecode
+*.pyc
+
+# Logs
+*.log
+
+# Virtualenv
+/.venv/
+
+# Build
+build/
+dist/
+__pycache__/
