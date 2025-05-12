@@ -15,7 +15,7 @@
 *.out
 
 # Dependency directories (remove the comment below to include it)
-# vendor/
+ vendor/
 
 # Go workspace file
 go.work
@@ -45,3 +45,6 @@ go.work.sum
 build/
 dist/
 __pycache__/
+
+# Self files
+通义千问api.txt
