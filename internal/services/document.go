@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -134,86 +133,6 @@ func (s *DocumentService) Init() error {
 	if s.statusManager == nil {
 		s.statusManager = NewDocumentStatusManager(s.repo, s.logger)
 	}
-
-	return nil
-}
-
-// ProcessDocument 处理文档(解析、分段、向量化、入库)
-func (s *DocumentService) ProcessDocument(ctx context.Context, fileID string, filePath string) error {
-	// 确保初始化完成
-	if err := s.Init(); err != nil {
-		return err
-	}
-
-	s.logger.WithFields(logrus.Fields{
-		"file_id":   fileID,
-		"file_path": filePath,
-	}).Info("Starting document processing")
-
-	// 检查输入参数
-	if fileID == "" {
-		return errors.New("fileID cannot be empty")
-	}
-	if filePath == "" {
-		return errors.New("filePath cannot be empty")
-	}
-
-	// 如果启用异步处理并且任务队列已配置，使用任务队列处理
-	if s.asyncEnabled && s.taskQueue != nil {
-		return s.processDocumentAsync(ctx, fileID, filePath)
-	}
-
-	// 否则，使用同步方式处理
-	return s.processDocumentSync(ctx, fileID, filePath)
-}
-
-// processDocumentAsync 异步处理文档
-// 将任务加入队列并立即返回
-func (s *DocumentService) processDocumentAsync(ctx context.Context, fileID string, filePath string) error {
-	s.logger.WithFields(logrus.Fields{
-		"file_id":   fileID,
-		"file_path": filePath,
-	}).Info("Enqueuing document for async processing")
-
-	// 更新文档状态为处理中
-	if err := s.statusManager.MarkAsProcessing(ctx, fileID); err != nil {
-		s.logger.WithError(err).Error("Failed to mark document as processing")
-		// 继续处理，不中断
-	}
-
-	// 创建处理任务载荷
-	fileName := filepath.Base(filePath)
-	fileType := filepath.Ext(fileName)
-	if fileType != "" && fileType[0] == '.' {
-		fileType = fileType[1:] // 去掉开头的点号
-	}
-
-	payload := taskqueue.ProcessCompletePayload{
-		DocumentID: fileID,
-		FilePath:   filePath,
-		FileName:   fileName,
-		FileType:   fileType,
-		ChunkSize:  1000,      // 默认分块大小
-		Overlap:    200,       // 默认重叠大小
-		SplitType:  "text",    // 默认分割类型
-		Model:      "default", // 默认模型
-		Metadata: map[string]string{
-			"source":     "api",
-			"created_by": "document_service",
-		},
-	}
-
-	// 创建任务
-	taskID, err := s.repo.CreateTask(ctx, taskqueue.TaskProcessComplete, fileID, payload)
-	if err != nil {
-		s.failDocument(ctx, fileID, fmt.Sprintf("failed to create processing task: %v", err))
-		return fmt.Errorf("failed to create processing task: %w", err)
-	}
-
-	s.logger.WithFields(logrus.Fields{
-		"file_id": fileID,
-		"task_id": taskID,
-	}).Info("Document processing task created successfully")
 
 	return nil
 }
@@ -412,6 +331,32 @@ func (s *DocumentService) processBatches(ctx context.Context, fileID string, fil
 	return nil
 }
 
+// ProcessDocument 处理文档
+// 解析文档内容，分段处理并生成向量表示，存入向量数据库
+func (s *DocumentService) ProcessDocument(ctx context.Context, fileID string, filePath string) error {
+	// 确保初始化完成
+	if err := s.Init(); err != nil {
+		return fmt.Errorf("failed to initialize document service: %w", err)
+	}
+
+	s.logger.WithFields(logrus.Fields{
+		"file_id":       fileID,
+		"file_path":     filePath,
+		"async_enabled": s.asyncEnabled,
+	}).Info("Processing document")
+
+	// 如果启用了异步处理，将任务加入队列
+	if s.asyncEnabled && s.taskQueue != nil {
+		s.logger.Info("Using async processing for document")
+		// 使用默认的异步处理选项
+		return s.ProcessDocumentAsync(ctx, fileID, filePath)
+	}
+
+	// 否则，使用同步处理
+	s.logger.Info("Using sync processing for document")
+	return s.processDocumentSync(ctx, fileID, filePath)
+}
+
 // DeleteDocument 删除文档及其相关数据
 func (s *DocumentService) DeleteDocument(ctx context.Context, fileID string) error {
 	// 确保初始化完成
@@ -534,20 +479,6 @@ func (s *DocumentService) GetDocumentStatus(ctx context.Context, fileID string) 
 	}
 
 	return s.statusManager.GetStatus(ctx, fileID)
-}
-
-// GetDocumentTasks 获取文档相关的任务
-func (s *DocumentService) GetDocumentTasks(ctx context.Context, fileID string) ([]*taskqueue.Task, error) {
-	// 确保初始化完成
-	if err := s.Init(); err != nil {
-		return nil, err
-	}
-
-	if !s.asyncEnabled || s.taskQueue == nil {
-		return nil, errors.New("async processing not enabled")
-	}
-
-	return s.repo.GetDocumentTasks(ctx, fileID)
 }
 
 // WaitForDocumentProcessing 等待文档处理完成

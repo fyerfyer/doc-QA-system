@@ -2,9 +2,11 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"github.com/fyerfyer/doc-QA-system/internal/database"
 	"github.com/fyerfyer/doc-QA-system/internal/models"
 	"github.com/fyerfyer/doc-QA-system/internal/repository"
+	"github.com/fyerfyer/doc-QA-system/pkg/taskqueue"
 	"github.com/sirupsen/logrus"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -493,6 +495,332 @@ func TestDocumentStatusManager_EdgeCases(t *testing.T) {
 		// 尝试更新已完成文档的进度
 		err = statusManager.UpdateProgress(ctx, docID, 50)
 		assert.Error(t, err, "Should not be able to update progress of completed document")
+	})
+}
+
+// TestAsyncDocumentProcessing 测试异步文档处理功能
+func TestAsyncDocumentProcessing(t *testing.T) {
+	// 如果 Redis 不可用则跳过
+	redisConn, err := taskqueue.NewRedisQueue(&taskqueue.Config{
+		RedisAddr: "localhost:6379",
+		RedisDB:   15, // 使用 DB 15 进行测试
+	})
+
+	if err != nil {
+		t.Skip("Redis 不可用，跳过异步文档处理测试:", err)
+		return
+	}
+	defer redisConn.Close()
+
+	// 创建临时目录和文件
+	tempDir, err := os.MkdirTemp("", "docqa-async-test-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+
+	testContent := "这是一个用于测试异步处理的文档内容。\n\n包含多个段落。\n\n用于测试异步处理功能。"
+	testFile := filepath.Join(tempDir, "async_test.txt")
+	err = os.WriteFile(testFile, []byte(testContent), 0644)
+	require.NoError(t, err)
+
+	// 初始化测试环境和服务
+	docService, _, statusManager := setupDocumentTestEnv(t, tempDir)
+
+	// 首先在数据库中创建一个文档记录
+	ctx := context.Background()
+	fileID := "async-test-file"
+	fileName := filepath.Base(testFile)
+	fileInfo, err := os.Stat(testFile)
+	require.NoError(t, err)
+
+	// 在处理之前将文档标记为已上传
+	err = statusManager.MarkAsUploaded(ctx, fileID, fileName, testFile, fileInfo.Size())
+	require.NoError(t, err, "创建初始文档记录失败")
+
+	// 创建用于异步处理的 Redis 队列
+	queueConfig := &taskqueue.Config{
+		RedisAddr:   "localhost:6379",
+		RedisDB:     15, // 使用 DB 15 进行测试
+		Concurrency: 2,
+		RetryLimit:  2,
+		RetryDelay:  time.Second,
+	}
+	queue, err := taskqueue.NewRedisQueue(queueConfig)
+	require.NoError(t, err, "创建 Redis 队列失败")
+	defer queue.Close()
+
+	// 测试 EnableAsyncProcessing
+	t.Run("EnableAsyncProcessing", func(t *testing.T) {
+		docService.EnableAsyncProcessing(queue)
+		assert.True(t, docService.asyncEnabled)
+		assert.NotNil(t, docService.taskQueue)
+	})
+
+	// 测试 DisableAsyncProcessing
+	t.Run("DisableAsyncProcessing", func(t *testing.T) {
+		docService.EnableAsyncProcessing(queue)
+		docService.DisableAsyncProcessing()
+		assert.False(t, docService.asyncEnabled)
+		// 即使禁用了异步处理，队列仍应可用
+		assert.NotNil(t, docService.taskQueue)
+	})
+
+	// 重新启用异步处理以进行后续测试
+	docService.EnableAsyncProcessing(queue)
+
+	// 测试 ProcessDocumentAsync
+	t.Run("ProcessDocumentAsync", func(t *testing.T) {
+		err := docService.ProcessDocumentAsync(ctx, fileID, testFile)
+		require.NoError(t, err, "ProcessDocumentAsync 不应失败")
+
+		// 检查文档状态（应为处理中）
+		status, err := statusManager.GetStatus(ctx, fileID)
+		require.NoError(t, err)
+		assert.Equal(t, models.DocStatusProcessing, status)
+
+		// 获取文档的任务
+		tasks, err := queue.GetTasksByDocument(ctx, fileID)
+		require.NoError(t, err)
+		assert.NotEmpty(t, tasks, "预期至少创建一个任务")
+
+		// 验证任务类型
+		assert.Equal(t, taskqueue.TaskProcessComplete, tasks[0].Type)
+	})
+
+	// 测试带选项的 ProcessDocumentAsync
+	t.Run("ProcessDocumentAsyncWithOptions", func(t *testing.T) {
+		// 创建一个新的文档 ID
+		fileID2 := "async-test-options"
+		err = statusManager.MarkAsUploaded(ctx, fileID2, fileName, testFile, fileInfo.Size())
+		require.NoError(t, err)
+
+		// 使用选项进行处理
+		err = docService.ProcessDocumentAsync(
+			ctx,
+			fileID2,
+			testFile,
+			WithChunkSize(200),
+			WithChunkOverlap(50),
+			WithSplitType("sentence"),
+			WithMetadata(map[string]string{"test": "value"}),
+		)
+		require.NoError(t, err)
+
+		// 获取任务并验证负载
+		tasks, err := queue.GetTasksByDocument(ctx, fileID2)
+		require.NoError(t, err)
+		require.NotEmpty(t, tasks)
+
+		// 检查任务负载
+		var payload taskqueue.ProcessCompletePayload
+		err = json.Unmarshal(tasks[0].Payload, &payload)
+		require.NoError(t, err)
+
+		assert.Equal(t, 200, payload.ChunkSize)
+		assert.Equal(t, 50, payload.Overlap)
+		assert.Equal(t, "sentence", payload.SplitType)
+		assert.Equal(t, map[string]string{"test": "value"}, payload.Metadata)
+	})
+
+	// 测试 WaitForDocumentProcessing
+	t.Run("WaitForDocumentProcessing", func(t *testing.T) {
+		// 尝试使用短超时时间 - 应超时，因为文档仍在处理中
+		err := docService.WaitForDocumentProcessing(ctx, fileID, 100*time.Millisecond)
+		assert.Error(t, err, "预期超时错误")
+
+		// 手动更新任务状态以模拟完成
+		tasks, err := queue.GetTasksByDocument(ctx, fileID)
+		require.NoError(t, err)
+		require.NotEmpty(t, tasks)
+
+		taskID := tasks[0].ID
+		err = queue.UpdateTaskStatus(ctx, taskID, taskqueue.StatusCompleted, json.RawMessage(`{}`), "")
+		require.NoError(t, err)
+
+		// 将文档标记为已完成
+		err = statusManager.MarkAsCompleted(ctx, fileID, 3)
+		require.NoError(t, err)
+
+		// 现在等待应成功
+		err = docService.WaitForDocumentProcessing(ctx, fileID, 1*time.Second)
+		assert.NoError(t, err, "文档完成后等待应成功")
+	})
+
+	// 测试 GetDocumentTasks
+	t.Run("GetDocumentTasks", func(t *testing.T) {
+		tasks, err := docService.GetDocumentTasks(ctx, fileID)
+		require.NoError(t, err)
+		assert.NotEmpty(t, tasks, "应返回文档的任务")
+	})
+}
+
+// TestCallbackHandlers 测试异步处理的各种回调处理程序
+func TestCallbackHandlers(t *testing.T) {
+	// 如果 Redis 不可用则跳过
+	redisConn, err := taskqueue.NewRedisQueue(&taskqueue.Config{
+		RedisAddr: "localhost:6379",
+		RedisDB:   15,
+	})
+
+	if err != nil {
+		t.Skip("Redis 不可用，跳过回调处理程序测试:", err)
+		return
+	}
+	defer redisConn.Close()
+
+	// 创建临时目录
+	tempDir, err := os.MkdirTemp("", "docqa-handlers-test-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+
+	// 设置测试环境
+	docService, _, statusManager := setupDocumentTestEnv(t, tempDir)
+
+	// 创建 Redis 队列
+	queue, err := taskqueue.NewRedisQueue(&taskqueue.Config{
+		RedisAddr: "localhost:6379",
+		RedisDB:   15,
+	})
+	require.NoError(t, err)
+	defer queue.Close()
+
+	// 启用异步处理
+	docService.EnableAsyncProcessing(queue)
+
+	ctx := context.Background()
+
+	// 在数据库中创建一个测试文档
+	docID := "callback-test-doc"
+	status := statusManager.MarkAsUploaded(ctx, docID, "test.txt", "path/to/test.txt", 1000)
+	require.NoError(t, status)
+
+	// 测试文档解析结果处理程序
+	t.Run("DocumentParseResultHandler", func(t *testing.T) {
+		task := &taskqueue.Task{
+			ID:         "parse-task",
+			Type:       taskqueue.TaskDocumentParse,
+			DocumentID: docID,
+			Status:     taskqueue.StatusCompleted,
+		}
+
+		result := taskqueue.DocumentParseResult{
+			Content: "This is test content for parse result",
+			Title:   "Test Document",
+			Words:   5,
+			Chars:   35,
+		}
+
+		resultJSON, _ := json.Marshal(result)
+
+		// 首先将文档设置为处理中状态
+		err = statusManager.MarkAsProcessing(ctx, docID)
+		require.NoError(t, err)
+
+		// 调用处理程序
+		err = docService.handleDocumentParseResult(ctx, task, resultJSON)
+		require.NoError(t, err)
+
+		// 检查文档进度是否更新
+		doc, err := statusManager.GetDocument(ctx, docID)
+		require.NoError(t, err)
+		assert.Greater(t, doc.Progress, 0)
+	})
+
+	// 测试文本分块结果处理程序
+	t.Run("TextChunkResultHandler", func(t *testing.T) {
+		task := &taskqueue.Task{
+			ID:         "chunk-task",
+			Type:       taskqueue.TaskTextChunk,
+			DocumentID: docID,
+			Status:     taskqueue.StatusCompleted,
+		}
+
+		result := taskqueue.TextChunkResult{
+			DocumentID: docID,
+			Chunks: []taskqueue.ChunkInfo{
+				{Text: "Chunk 1", Index: 0},
+				{Text: "Chunk 2", Index: 1},
+			},
+			ChunkCount: 2,
+		}
+
+		resultJSON, _ := json.Marshal(result)
+
+		// 调用处理程序
+		err = docService.handleTextChunkResult(ctx, task, resultJSON)
+		require.NoError(t, err)
+
+		// 检查文档进度是否更新
+		doc, err := statusManager.GetDocument(ctx, docID)
+		require.NoError(t, err)
+		assert.Greater(t, doc.Progress, 30)
+	})
+
+	// 测试向量化结果处理程序
+	t.Run("VectorizeResultHandler", func(t *testing.T) {
+		task := &taskqueue.Task{
+			ID:         "vector-task",
+			Type:       taskqueue.TaskVectorize,
+			DocumentID: docID,
+			Status:     taskqueue.StatusCompleted,
+		}
+
+		result := taskqueue.VectorizeResult{
+			DocumentID: docID,
+			Vectors: []taskqueue.VectorInfo{
+				{ChunkIndex: 0, Vector: []float32{0.1, 0.2, 0.3, 0.4}},
+				{ChunkIndex: 1, Vector: []float32{0.5, 0.6, 0.7, 0.8}},
+			},
+			VectorCount: 2,
+			Model:       "test-model",
+			Dimension:   4,
+		}
+
+		resultJSON, _ := json.Marshal(result)
+
+		// 调用处理程序
+		err = docService.handleVectorizeResult(ctx, task, resultJSON)
+		require.NoError(t, err)
+
+		// 检查文档是否完成
+		status, err := statusManager.GetStatus(ctx, docID)
+		require.NoError(t, err)
+		assert.Equal(t, models.DocStatusCompleted, status)
+	})
+
+	// 测试处理完成结果处理程序
+	t.Run("ProcessCompleteResultHandler", func(t *testing.T) {
+		// 为此测试创建另一个文档
+		docID2 := "complete-test-doc"
+		err = statusManager.MarkAsUploaded(ctx, docID2, "test2.txt", "path/to/test2.txt", 1000)
+		require.NoError(t, err)
+
+		task := &taskqueue.Task{
+			ID:         "complete-task",
+			Type:       taskqueue.TaskProcessComplete,
+			DocumentID: docID2,
+			Status:     taskqueue.StatusCompleted,
+		}
+
+		result := taskqueue.ProcessCompleteResult{
+			DocumentID:   docID2,
+			ChunkCount:   3,
+			VectorCount:  3,
+			Dimension:    4,
+			ParseStatus:  "success",
+			ChunkStatus:  "success",
+			VectorStatus: "success",
+		}
+
+		resultJSON, _ := json.Marshal(result)
+
+		// 调用处理程序
+		err = docService.handleProcessCompleteResult(ctx, task, resultJSON)
+		require.NoError(t, err)
+
+		// 检查文档是否完成
+		status, err := statusManager.GetStatus(ctx, docID2)
+		require.NoError(t, err)
+		assert.Equal(t, models.DocStatusCompleted, status)
 	})
 }
 

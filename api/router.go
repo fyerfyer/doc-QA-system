@@ -100,6 +100,21 @@ func SetupRouter(
 	return router
 }
 
+// RegisterTaskRoutes 注册任务相关路由
+func RegisterTaskRoutes(router *gin.Engine, taskHandler *handler.TaskHandler) {
+	taskGroup := router.Group("/api/tasks")
+	{
+		// 任务回调接口
+		taskGroup.POST("/callback", taskHandler.HandleCallback)
+
+		// 获取任务状态
+		taskGroup.GET("/:id", taskHandler.GetTaskStatus)
+
+		// 获取文档关联的任务
+		taskGroup.GET("/document/:document_id", taskHandler.GetDocumentTasks)
+	}
+}
+
 // RegisterSwagger 注册Swagger文档路由
 // TODO: 当集成Swagger文档后实现此函数
 func RegisterSwagger(router *gin.Engine) {

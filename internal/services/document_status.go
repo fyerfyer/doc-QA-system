@@ -54,6 +54,8 @@ func (m *DocumentStatusManager) MarkAsUploaded(ctx context.Context, docID string
 		UploadedAt: time.Now(),
 		UpdatedAt:  time.Now(),
 		Progress:   0,
+		// 设置初始处理阶段
+		CurrentStage: models.StageParsing,
 	}
 
 	m.logger.WithFields(logrus.Fields{
@@ -86,7 +88,14 @@ func (m *DocumentStatusManager) MarkAsProcessing(ctx context.Context, docID stri
 	m.logger.WithField("doc_id", docID).Info("Marking document as processing")
 
 	// 更新状态
-	return m.repo.UpdateStatus(docID, models.DocStatusProcessing, "")
+	doc.Status = models.DocStatusProcessing
+	doc.UpdatedAt = time.Now()
+	// 设置初始处理阶段（如果尚未设置）
+	if doc.CurrentStage == "" {
+		doc.CurrentStage = models.StageParsing
+	}
+
+	return m.repo.Update(doc)
 }
 
 // MarkAsCompleted 将文档标记为处理完成状态
@@ -111,17 +120,15 @@ func (m *DocumentStatusManager) MarkAsCompleted(ctx context.Context, docID strin
 		"segment_count": segmentCount,
 	}).Info("Marking document as completed")
 
-	// 更新状态
-	if err := m.repo.UpdateStatus(docID, models.DocStatusCompleted, ""); err != nil {
-		return err
-	}
-
-	// 更新文档记录，添加段落数量并设置处理完成时间
+	// 更新文档记录
 	doc.Status = models.DocStatusCompleted
 	doc.SegmentCount = segmentCount
 	doc.Progress = 100
 	now := time.Now()
 	doc.ProcessedAt = &now
+	doc.UpdatedAt = now
+	doc.CurrentStage = models.StageCompleted
+
 	return m.repo.Update(doc)
 }
 
@@ -131,7 +138,7 @@ func (m *DocumentStatusManager) MarkAsFailed(ctx context.Context, docID string, 
 	defer m.mu.Unlock()
 
 	// 获取当前文档
-	_, err := m.repo.GetByID(docID)
+	doc, err := m.repo.GetByID(docID)
 	if err != nil {
 		return fmt.Errorf("failed to get document: %w", err)
 	}
@@ -141,8 +148,14 @@ func (m *DocumentStatusManager) MarkAsFailed(ctx context.Context, docID string, 
 		"error":  errorMsg,
 	}).Error("Marking document as failed")
 
-	// 更新状态
-	return m.repo.UpdateStatus(docID, models.DocStatusFailed, errorMsg)
+	// 更新文档记录
+	doc.Status = models.DocStatusFailed
+	doc.Error = errorMsg
+	now := time.Now()
+	doc.ProcessedAt = &now
+	doc.UpdatedAt = now
+
+	return m.repo.Update(doc)
 }
 
 // UpdateProgress 更新文档处理进度
@@ -167,7 +180,128 @@ func (m *DocumentStatusManager) UpdateProgress(ctx context.Context, docID string
 	}).Debug("Updating document progress")
 
 	// 更新进度
-	return m.repo.UpdateProgress(docID, progress)
+	doc.Progress = progress
+	doc.UpdatedAt = time.Now()
+
+	return m.repo.Update(doc)
+}
+
+// UpdateStage 更新文档处理阶段
+func (m *DocumentStatusManager) UpdateStage(ctx context.Context, docID string, stage models.ProcessStage) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// 获取当前文档
+	doc, err := m.repo.GetByID(docID)
+	if err != nil {
+		return fmt.Errorf("failed to get document: %w", err)
+	}
+
+	// 只有处理中的文档才能更新阶段
+	if doc.Status != models.DocStatusProcessing {
+		return fmt.Errorf("cannot update stage: document %s is not in processing state", docID)
+	}
+
+	m.logger.WithFields(logrus.Fields{
+		"doc_id":     docID,
+		"stage":      stage,
+		"prev_stage": doc.CurrentStage,
+	}).Debug("Updating document stage")
+
+	// 更新处理阶段
+	doc.CurrentStage = stage
+	doc.UpdatedAt = time.Now()
+
+	// 根据阶段设置进度指示
+	switch stage {
+	case models.StageParsing:
+		doc.Progress = 20
+	case models.StageChunking:
+		doc.Progress = 50
+	case models.StageVectorizing:
+		doc.Progress = 75
+	case models.StageCompleted:
+		doc.Progress = 100
+	}
+
+	return m.repo.Update(doc)
+}
+
+// UpdateCurrentTask 更新文档关联的当前任务
+func (m *DocumentStatusManager) UpdateCurrentTask(ctx context.Context, docID string, taskID string, taskStatus string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// 获取当前文档
+	doc, err := m.repo.GetByID(docID)
+	if err != nil {
+		return fmt.Errorf("failed to get document: %w", err)
+	}
+
+	m.logger.WithFields(logrus.Fields{
+		"doc_id":       docID,
+		"task_id":      taskID,
+		"task_status":  taskStatus,
+		"prev_task_id": doc.CurrentTaskID,
+	}).Debug("Updating document current task")
+
+	// 更新任务ID和状态
+	doc.CurrentTaskID = taskID
+	doc.LastTaskStatus = taskStatus
+	doc.UpdatedAt = time.Now()
+
+	return m.repo.Update(doc)
+}
+
+// UpdatePythonService 更新处理文档的Python服务
+func (m *DocumentStatusManager) UpdatePythonService(ctx context.Context, docID string, serviceName string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// 获取当前文档
+	doc, err := m.repo.GetByID(docID)
+	if err != nil {
+		return fmt.Errorf("failed to get document: %w", err)
+	}
+
+	m.logger.WithFields(logrus.Fields{
+		"doc_id":       docID,
+		"service_name": serviceName,
+		"prev_service": doc.PythonService,
+	}).Debug("Updating document python service")
+
+	// 更新Python服务名称
+	doc.PythonService = serviceName
+	doc.UpdatedAt = time.Now()
+
+	return m.repo.Update(doc)
+}
+
+// IncrementRetryCount 增加重试计数并返回新值
+func (m *DocumentStatusManager) IncrementRetryCount(ctx context.Context, docID string) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// 获取当前文档
+	doc, err := m.repo.GetByID(docID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get document: %w", err)
+	}
+
+	// 增加重试计数
+	doc.RetryCount++
+	doc.UpdatedAt = time.Now()
+
+	m.logger.WithFields(logrus.Fields{
+		"doc_id":      docID,
+		"retry_count": doc.RetryCount,
+	}).Info("Incrementing document retry count")
+
+	if err := m.repo.Update(doc); err != nil {
+		return 0, err
+	}
+
+	return doc.RetryCount, nil
 }
 
 // GetStatus 获取文档当前状态

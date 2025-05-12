@@ -19,6 +19,9 @@ type Config struct {
 	Embed    EmbedConfig    `mapstructure:"embed"`
 	Cache    CacheConfig    `mapstructure:"cache"`
 	Queue    QueueConfig    `mapstructure:"queue"` // 新增队列配置
+	Database DatabaseConfig `mapstructure:"database"` // 数据库配置
+    Document DocumentConfig `mapstructure:"document"` // 文档处理配置
+    Search   SearchConfig   `mapstructure:"search"`   // 搜索配置
 }
 
 // ServerConfig 服务器配置
@@ -29,13 +32,13 @@ type ServerConfig struct {
 
 // StorageConfig 存储配置
 type StorageConfig struct {
-	Type   string `mapstructure:"type"`   // 存储类型：local 或 minio
-	Path   string `mapstructure:"path"`   // 本地存储路径或MinIO端点
-	Bucket string `mapstructure:"bucket"` // MinIO桶名称
-	// MinIO认证信息
-	AccessKey string `mapstructure:"access_key"`
-	SecretKey string `mapstructure:"secret_key"`
-	UseSSL    bool   `mapstructure:"use_ssl"` // 是否使用SSL
+	Type      string `mapstructure:"type"`   // 存储类型：local 或 minio
+    Path      string `mapstructure:"path"`   // 本地存储路径
+    Bucket    string `mapstructure:"bucket"` // MinIO桶名称
+    Endpoint  string `mapstructure:"endpoint"` // MinIO端点
+    AccessKey string `mapstructure:"access_key"`
+    SecretKey string `mapstructure:"secret_key"`
+    UseSSL    bool   `mapstructure:"use_ssl"` // 是否使用SSL
 }
 
 // VectorDBConfig 向量数据库配置
@@ -48,20 +51,22 @@ type VectorDBConfig struct {
 
 // LLMConfig 大语言模型配置
 type LLMConfig struct {
-	Provider  string `mapstructure:"provider"`   // 提供商：openai, ollama, etc
-	Model     string `mapstructure:"model"`      // 模型名称
-	APIKey    string `mapstructure:"api_key"`    // API密钥
-	Endpoint  string `mapstructure:"endpoint"`   // API端点
-	MaxTokens int    `mapstructure:"max_tokens"` // 最大生成token数量
+	Provider    string  `mapstructure:"provider"`    // 提供商：openai, ollama, etc
+    Model       string  `mapstructure:"model"`       // 模型名称
+    APIKey      string  `mapstructure:"api_key"`     // API密钥
+    Endpoint    string  `mapstructure:"endpoint"`    // API端点
+    MaxTokens   int     `mapstructure:"max_tokens"`  // 最大生成token数量
+    Temperature float32 `mapstructure:"temperature"` // 采样温度
 }
 
 // EmbedConfig 向量嵌入模型配置
 type EmbedConfig struct {
-	Provider  string `mapstructure:"provider"`   // 提供商：openai, local, etc
-	Model     string `mapstructure:"model"`      // 模型名称
-	APIKey    string `mapstructure:"api_key"`    // API密钥（如果需要）
-	Endpoint  string `mapstructure:"endpoint"`   // API端点
-	BatchSize int    `mapstructure:"batch_size"` // 批处理大小
+	Provider   string `mapstructure:"provider"`   // 提供商：openai, local, etc
+    Model      string `mapstructure:"model"`      // 模型名称
+    APIKey     string `mapstructure:"api_key"`    // API密钥（如果需要）
+    Endpoint   string `mapstructure:"endpoint"`   // API端点
+    BatchSize  int    `mapstructure:"batch_size"` // 批处理大小
+    Dimensions int    `mapstructure:"dimensions"` // 向量维度
 }
 
 // CacheConfig 缓存配置
@@ -77,13 +82,32 @@ type CacheConfig struct {
 // QueueConfig 任务队列配置
 type QueueConfig struct {
 	Enable        bool   `mapstructure:"enable"`         // 是否启用任务队列
-	Type          string `mapstructure:"type"`           // 队列类型：redis 或 memory
-	RedisAddr     string `mapstructure:"redis_addr"`     // Redis地址
-	RedisPassword string `mapstructure:"redis_password"` // Redis密码
-	RedisDB       int    `mapstructure:"redis_db"`       // Redis数据库编号
-	Concurrency   int    `mapstructure:"concurrency"`    // 任务处理并发数
-	RetryLimit    int    `mapstructure:"retry_limit"`    // 任务最大重试次数
-	RetryDelay    int    `mapstructure:"retry_delay"`    // 重试延迟(秒)
+    Type          string `mapstructure:"type"`           // 队列类型：redis或memory
+    RedisAddr     string `mapstructure:"redis_addr"`     // Redis地址
+    RedisPassword string `mapstructure:"redis_password"` // Redis密码
+    RedisDB       int    `mapstructure:"redis_db"`       // Redis数据库编号
+    Concurrency   int    `mapstructure:"concurrency"`    // 任务处理并发数
+    RetryLimit    int    `mapstructure:"retry_limit"`    // 任务最大重试次数
+    RetryDelay    int    `mapstructure:"retry_delay"`    // 重试延迟(秒)
+    CallbackURL   string `mapstructure:"callback_url"`   // 回调URL
+}
+
+// DatabaseConfig 数据库配置
+type DatabaseConfig struct {
+    Type string `mapstructure:"type"` // 数据库类型: sqlite, mysql, postgres
+    DSN  string `mapstructure:"dsn"`  // 数据源名称
+}
+
+// DocumentConfig 文档处理配置
+type DocumentConfig struct {
+    ChunkSize    int `mapstructure:"chunk_size"`     // 分块大小
+    ChunkOverlap int `mapstructure:"chunk_overlap"`  // 分块重叠大小
+}
+
+// SearchConfig 搜索配置
+type SearchConfig struct {
+    Limit    int     `mapstructure:"limit"`     // 搜索结果数量限制
+    MinScore float32 `mapstructure:"min_score"` // 最低相似度分数
 }
 
 // Load 从文件和环境变量加载配置
@@ -172,11 +196,23 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("cache.ttl", 3600) // 1小时
 
 	// 队列默认配置
-	v.SetDefault("queue.enable", false)
-	v.SetDefault("queue.type", "redis")
-	v.SetDefault("queue.redis_addr", "localhost:6379")
-	v.SetDefault("queue.redis_db", 0)
-	v.SetDefault("queue.concurrency", 10)
-	v.SetDefault("queue.retry_limit", 3)
-	v.SetDefault("queue.retry_delay", 60) // 60秒
+    v.SetDefault("queue.enable", false)
+    v.SetDefault("queue.type", "redis")
+    v.SetDefault("queue.redis_addr", "localhost:6379")
+    v.SetDefault("queue.redis_db", 0)
+    v.SetDefault("queue.concurrency", 10)
+    v.SetDefault("queue.retry_limit", 3)
+    v.SetDefault("queue.retry_delay", 60) // 60秒
+    
+    // 数据库默认配置
+    v.SetDefault("database.type", "sqlite")
+    v.SetDefault("database.dsn", "data/docqa.db")
+    
+    // 文档处理默认配置
+    v.SetDefault("document.chunk_size", 1000)
+    v.SetDefault("document.chunk_overlap", 200)
+    
+    // 搜索默认配置
+    v.SetDefault("search.limit", 10)
+    v.SetDefault("search.min_score", 0.5)
 }
