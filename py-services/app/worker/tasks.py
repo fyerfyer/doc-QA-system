@@ -137,37 +137,45 @@ def parse_document(task_id: str) -> bool:
 
     try:
         # 解析任务载荷
-        payload = DocumentParsePayload(**task.payload)
+        if not isinstance(task.payload, dict):
+            raise ValueError("Task payload is not a dictionary")
+        else:
+            payload = DocumentParsePayload(**task.payload)
+        
         logger.info(f"Parsing document: {payload.file_path}")
 
-        # TODO: 实现文档解析逻辑，这需要文档解析模块完成后再实现
-        # 从存储中获取文件
-        # 基于文件类型选择解析器
+        # 实现文档解析逻辑
+        from app.parsers.factory import create_parser, detect_content_type
+        
+        # 检测内容类型
+        mime_type = detect_content_type(payload.file_path)
+        
+        # 创建对应的解析器
+        parser = create_parser(payload.file_path, mime_type)
+        
         # 执行解析
-
-        # 临时模拟解析结果
         start_time = time.time()
-        time.sleep(2)  # 模拟处理时间
-
-        # 模拟的解析结果
-        content = f"This is simulated content for {payload.file_name}"
-        title = payload.file_name.split('.')[0]
-
+        content = parser.parse(payload.file_path)
+        
+        # 提取标题和元数据
+        title = parser.extract_title(content, payload.file_name)
+        meta = parser.get_metadata(payload.file_path)
+        
         # 创建结果
         result = DocumentParseResult(
             content=content,
             title=title,
-            meta={"source": payload.file_path},
-            pages=1,
+            meta=meta,
+            pages=meta.get('page_count', 1) if isinstance(meta, dict) else 1,
             words=count_words(content),
             chars=count_chars(content)
         )
 
-        # 更新任务状态为已完成
-        update_task_status(task, TaskStatus.COMPLETED, result.__dict__)
-
         elapsed = time.time() - start_time
         logger.info(f"Document parse task {task_id} completed in {elapsed:.2f}s")
+        
+        # 更新任务状态为已完成
+        update_task_status(task, TaskStatus.COMPLETED, result.__dict__)
         return True
 
     except Exception as e:
@@ -201,45 +209,28 @@ def chunk_text(task_id: str) -> bool:
 
     try:
         # 解析任务载荷
-        payload = TextChunkPayload(**task.payload)
+        if not isinstance(task.payload, dict):
+            raise ValueError("Task payload is not a dictionary")
+        else:
+            payload = TextChunkPayload(**task.payload)
+            
         logger.info(f"Chunking text for document: {payload.document_id}")
 
-        # TODO: 实现文本分块逻辑，这需要文本分块模块完成后再实现
-        # 基于分块类型选择分块算法
+        # 实现文本分块逻辑
+        from app.chunkers.splitter import split_text
+        
         # 执行分块
-
-        # 临时模拟分块结果
         start_time = time.time()
-        time.sleep(1)  # 模拟处理时间
-
-        # 简单的文本分块模拟
-        text = payload.content
-        chunks = []
-        chunk_size = payload.chunk_size or 1000
-        overlap = payload.overlap or 200
-
-        # 非常简单的分块逻辑，实际实现应该更复杂
-        words = text.split()
-        chunk_words = []
-        chunk_index = 0
-
-        for i, word in enumerate(words):
-            chunk_words.append(word)
-
-            # 达到块大小，创建块
-            if len(chunk_words) >= chunk_size:
-                chunk_text = " ".join(chunk_words)
-                chunks.append(ChunkInfo(text=chunk_text, index=chunk_index))
-                chunk_index += 1
-
-                # 保留重叠部分的单词
-                overlap_words = min(overlap, len(chunk_words))
-                chunk_words = chunk_words[-overlap_words:] if overlap_words > 0 else []
-
-        # 添加剩余的单词
-        if chunk_words:
-            chunk_text = " ".join(chunk_words)
-            chunks.append(ChunkInfo(text=chunk_text, index=chunk_index))
+        chunks_data = split_text(
+            text=payload.content,
+            chunk_size=payload.chunk_size or 1000,
+            chunk_overlap=payload.overlap or 200,
+            split_type=payload.split_type or "paragraph",
+            metadata={"document_id": payload.document_id}
+        )
+        
+        # 转换为ChunkInfo列表
+        chunks = [ChunkInfo(text=chunk['text'], index=chunk['index']) for chunk in chunks_data]
 
         # 创建结果
         result = TextChunkResult(
@@ -248,11 +239,11 @@ def chunk_text(task_id: str) -> bool:
             chunk_count=len(chunks)
         )
 
-        # 更新任务状态为已完成
-        update_task_status(task, TaskStatus.COMPLETED, result.__dict__)
-
         elapsed = time.time() - start_time
         logger.info(f"Text chunking task {task_id} completed in {elapsed:.2f}s: {len(chunks)} chunks created")
+        
+        # 更新任务状态为已完成
+        update_task_status(task, TaskStatus.COMPLETED, result.__dict__)
         return True
 
     except Exception as e:
@@ -286,45 +277,58 @@ def vectorize_text(task_id: str) -> bool:
 
     try:
         # 解析任务载荷
-        payload = VectorizePayload(**task.payload)
+        if not isinstance(task.payload, dict):
+            raise ValueError("Task payload is not a dictionary")
+        else:
+            payload = VectorizePayload(**task.payload)
+            
         logger.info(f"Vectorizing text for document: {payload.document_id}, chunks: {len(payload.chunks)}")
 
-        # TODO: 实现向量化逻辑，这需要嵌入模块完成后再实现
-        # 基于模型名称选择嵌入模型
-        # 执行向量化
-
-        # 临时模拟向量化结果
-        start_time = time.time()
-        time.sleep(2)  # 模拟处理时间
-
-        # 假设的向量维度
-        dimension = 1536  # 常见的向量维度
-        vectors = []
-
-        # 为每个块创建随机向量（实际应使用嵌入模型）
+        # 实现向量化逻辑
+        from app.embedders.factory import create_embedder
+        
+        # 创建嵌入模型
+        embedder = create_embedder(payload.model)
+        
+        # 提取文本 - 修复：处理字典和对象两种情况
+        texts = []
         for chunk in payload.chunks:
-            # 创建简单的随机向量，实际应该使用嵌入模型
-            import numpy as np
-            vector = np.random.rand(dimension).astype(np.float32).tolist()
-            vectors.append(VectorInfo(
-                chunk_index=chunk.index,
-                vector=vector
-            ))
+            if isinstance(chunk, dict):
+                # 如果是字典，直接获取text字段
+                if 'text' not in chunk:
+                    raise ValueError(f"Chunk missing 'text' field: {chunk}")
+                texts.append(chunk['text'])
+            elif hasattr(chunk, 'text'):
+                # 如果是对象，使用text属性
+                texts.append(chunk.text)
+            else:
+                raise ValueError(f"Invalid chunk format: {chunk}")
+        
+        # 执行向量化
+        start_time = time.time()
+        vectors_data = embedder.embed_batch(texts)
+        
+        # 创建向量信息
+        dimension = len(vectors_data[0]) if vectors_data else 0
+        vectors = []
+        for i, vec in enumerate(vectors_data):
+            chunk_index = payload.chunks[i].get('index', i) if isinstance(payload.chunks[i], dict) else payload.chunks[i].index
+            vectors.append(VectorInfo(chunk_index=chunk_index, vector=vec))
 
         # 创建结果
         result = VectorizeResult(
             document_id=payload.document_id,
             vectors=vectors,
             vector_count=len(vectors),
-            model=payload.model or "default",
+            model=payload.model or embedder.get_model_name(),
             dimension=dimension
         )
 
-        # 更新任务状态为已完成
-        update_task_status(task, TaskStatus.COMPLETED, result.__dict__)
-
         elapsed = time.time() - start_time
         logger.info(f"Text vectorization task {task_id} completed in {elapsed:.2f}s: {len(vectors)} vectors created")
+        
+        # 更新任务状态为已完成
+        update_task_status(task, TaskStatus.COMPLETED, result.__dict__)
         return True
 
     except Exception as e:
@@ -358,7 +362,11 @@ def process_document(task_id: str) -> bool:
 
     try:
         # 解析任务载荷
-        payload = ProcessCompletePayload(**task.payload)
+        if not isinstance(task.payload, dict):
+            raise ValueError("Task payload is not a dictionary")
+        else:
+            payload = ProcessCompletePayload(**task.payload)
+            
         logger.info(f"Processing document: {payload.document_id}, file: {payload.file_path}")
 
         result = ProcessCompleteResult(
@@ -371,26 +379,25 @@ def process_document(task_id: str) -> bool:
         # 1. 解析文档
         start_time = time.time()
         try:
-            # 创建解析任务载荷
-            parse_payload = DocumentParsePayload(
-                file_path=payload.file_path,
-                file_name=payload.file_name,
-                file_type=payload.file_type,
-                metadata=payload.metadata
-            )
-
-            # 创建子任务并等待完成
-            # 注意：在实际实现中应该使用更异步的方式，以下为简化示例
-            # 模拟解析结果
-            time.sleep(1)
-            content = f"This is the content of {payload.file_name}"
-            title = payload.file_name.split('.')[0]
-
+            from app.parsers.factory import create_parser, detect_content_type
+            
+            # 检测内容类型
+            mime_type = detect_content_type(payload.file_path)
+            
+            # 创建解析器并解析
+            parser = create_parser(payload.file_path, mime_type)
+            content = parser.parse(payload.file_path)
+            
+            # 提取标题和元数据
+            title = parser.extract_title(content, payload.file_name)
+            meta = parser.get_metadata(payload.file_path)
+            
+            # 创建解析结果
             parse_result = DocumentParseResult(
                 content=content,
                 title=title,
-                meta={"source": payload.file_path},
-                pages=1,
+                meta=meta,
+                pages=meta.get('page_count', 1) if isinstance(meta, dict) else 1,
                 words=count_words(content),
                 chars=count_chars(content)
             )
@@ -407,30 +414,19 @@ def process_document(task_id: str) -> bool:
 
         # 2. 文本分块
         try:
-            # 创建分块任务载荷
-            chunk_payload = TextChunkPayload(
-                document_id=payload.document_id,
-                content=parse_result.content,
+            from app.chunkers.splitter import split_text
+            
+            # 执行分块
+            chunks_data = split_text(
+                text=parse_result.content,
                 chunk_size=payload.chunk_size,
-                overlap=payload.overlap,
-                split_type=payload.split_type
+                chunk_overlap=payload.overlap,
+                split_type=payload.split_type,
+                metadata={"document_id": payload.document_id}
             )
-
-            # 模拟分块
-            time.sleep(1)
-            chunks = []
-            words = parse_result.content.split()
-            chunk_size = 100
-            for i in range(0, len(words), chunk_size):
-                end = min(i + chunk_size, len(words))
-                chunk_text = " ".join(words[i:end])
-                chunks.append(ChunkInfo(text=chunk_text, index=len(chunks)))
-
-            chunk_result = TextChunkResult(
-                document_id=payload.document_id,
-                chunks=chunks,
-                chunk_count=len(chunks)
-            )
+            
+            # 转换为ChunkInfo
+            chunks = [ChunkInfo(text=chunk['text'], index=chunk['index']) for chunk in chunks_data]
 
             result.chunk_status = "completed"
             result.chunk_count = len(chunks)
@@ -445,47 +441,32 @@ def process_document(task_id: str) -> bool:
 
         # 3. 向量化
         try:
-            # 创建向量化任务载荷
-            vector_payload = VectorizePayload(
-                document_id=payload.document_id,
-                chunks=chunks,
-                model=payload.model
-            )
-
-            # 模拟向量化
-            time.sleep(2)
-            dimension = 1536
-            vectors = []
-
-            import numpy as np
-            for chunk in chunks:
-                vector = np.random.rand(dimension).astype(np.float32).tolist()
-                vectors.append(VectorInfo(
-                    chunk_index=chunk.index,
-                    vector=vector
-                ))
-
-            vector_result = VectorizeResult(
-                document_id=payload.document_id,
-                vectors=vectors,
-                vector_count=len(vectors),
-                model=payload.model or "default",
-                dimension=dimension
-            )
+            from app.embedders.factory import create_embedder
+            
+            # 创建嵌入模型
+            embedder = create_embedder(payload.model)
+            
+            # 提取文本并向量化
+            texts = [chunk.text for chunk in chunks]
+            vector_data = embedder.embed_batch(texts)
+            
+            # 创建向量信息
+            dimension = len(vector_data[0]) if vector_data else 0
+            vectors = [
+                VectorInfo(chunk_index=chunks[i].index, vector=vec) 
+                for i, vec in enumerate(vector_data)
+            ]
 
             result.vector_status = "completed"
             result.vector_count = len(vectors)
             result.dimension = dimension
-            # 可选是否包含向量数据
-            # result.vectors = vectors  # 如果需要在结果中包含向量数据
+            result.vectors = vectors  # 将向量包含在结果中
             logger.info(f"Text vectorization completed for {payload.document_id}: {len(vectors)} vectors")
         except Exception as e:
             result.vector_status = "failed"
             result.error = f"Vectorization failed: {str(e)}"
             logger.error(f"Text vectorization failed: {str(e)}")
-            # 在向量化失败时，提前完成任务
-            update_task_status(task, TaskStatus.FAILED, result.__dict__, result.error)
-            return False
+            # 不需要在此提前结束，即使向量化失败仍可返回分块结果
 
         # 更新任务状态为已完成
         update_task_status(task, TaskStatus.COMPLETED, result.__dict__)

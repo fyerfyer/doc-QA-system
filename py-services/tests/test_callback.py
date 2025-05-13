@@ -1,11 +1,18 @@
 import pytest
 from datetime import datetime
-from unittest.mock import patch, MagicMock
+import json
+import os
+import time
+import traceback
+from unittest.mock import patch, MagicMock, ANY
 
-from fastapi.testclient import TestClient
-from app.main import app
-from app.api.callback import router, get_task_from_redis, update_task_status
-from app.models.model import Task, TaskType, TaskStatus
+import numpy as np
+from celery import Task as CeleryTask
+from app.models.model import Task, TaskType, TaskStatus, ChunkInfo, VectorInfo
+from app.worker.tasks import (
+    get_redis_client, get_task_from_redis, update_task_status,
+    parse_document, chunk_text, vectorize_text, process_document
+)
 from app.utils.utils import get_task_key, get_document_tasks_key
 
 # 测试客户端
@@ -16,6 +23,13 @@ client = TestClient(app)
 sample_task_id = "test-task-123"
 sample_document_id = "test-doc-123"
 
+@pytest.fixture
+def mock_redis():
+    """Redis客户端的模拟对象"""
+    with patch('app.worker.tasks.get_redis_client') as mock_get_redis:
+        mock_client = MagicMock()
+        mock_get_redis.return_value = mock_client
+        yield mock_client
 
 @pytest.fixture
 def mock_get_task_from_redis():
