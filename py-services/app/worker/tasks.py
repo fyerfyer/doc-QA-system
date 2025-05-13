@@ -1,7 +1,7 @@
 import os
 import time
 from typing import Any, Optional
-from datetime import datetime, timedelta
+from datetime import datetime
 import traceback
 
 import redis

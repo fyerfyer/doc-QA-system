@@ -1,13 +1,7 @@
 import pytest
 from datetime import datetime
-import json
-import os
-import time
-import traceback
-from unittest.mock import patch, MagicMock, ANY
 
-import numpy as np
-from celery import Task as CeleryTask
+from unittest.mock import patch, MagicMock
 from app.models.model import Task, TaskType, TaskStatus, ChunkInfo, VectorInfo
 from app.worker.tasks import (
     get_redis_client, get_task_from_redis, update_task_status,

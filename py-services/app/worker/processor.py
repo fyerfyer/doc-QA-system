@@ -1,5 +1,4 @@
 import os
-import json
 import time
 import traceback
 
@@ -16,6 +15,8 @@ from app.chunkers.splitter import split_text, TextSplitter, SplitConfig
 from app.embedders.factory import create_embedder, get_default_embedder
 from app.utils.utils import logger, send_callback, retry, count_words, count_chars
 from app.worker.tasks import get_redis_client, update_task_status
+from app.embedders.base import BaseEmbedder
+from app.worker.tasks import get_task_from_redis
 
 class DocumentProcessor:
     """文档处理器，负责执行文档的解析、分块和向量化任务"""
@@ -23,10 +24,17 @@ class DocumentProcessor:
     def __init__(self):
         """初始化文档处理器"""
         self.logger = logger
+        
         # 确保环境变量已配置
-        self.dashscope_api_key = os.getenv("DASHSCOPE_API_KEY")
+        self.dashscope_api_key = os.getenv("DASHSCOPE_API_KEY", "")
         self.embedding_model = os.getenv("EMBEDDING_MODEL", "text-embedding-v3")
         self.callback_url = os.getenv("CALLBACK_URL", "http://localhost:8080/api/tasks/callback")
+        
+        # 设置代理配置（用于HuggingFace）
+        self.proxies = {
+            "http": "http://127.0.0.1:7897",
+            "https": "http://127.0.0.1:7897"
+        }
 
         # 创建嵌入模型实例
         self._initialize_embedding_client()
@@ -35,37 +43,53 @@ class DocumentProcessor:
 
     def _initialize_embedding_client(self):
         """初始化嵌入模型客户端"""
-        try:
-            if self.dashscope_api_key:
+        # 尝试使用通义千问API（首选）
+        if self.dashscope_api_key:
+            try:
                 self.embedder = create_embedder(
                     "tongyi",
                     api_key=self.dashscope_api_key,
                     model_name=self.embedding_model
                 )
-                self.logger.info(f"Using Tongyi embedding model: {self.embedding_model}")
-            else:
-                self.logger.warning("No DashScope API key found, using local HuggingFace embedder")
-                self.embedder = get_default_embedder()
+                self.logger.info(f"Successfully initialized Tongyi embedder: {self.embedder.get_model_name()}")
+                return
+            except Exception as e:
+                self.logger.warning(f"Failed to initialize Tongyi embedder: {str(e)}, falling back to default embedder")
+        else:
+            self.logger.warning("No DashScope API key found, falling back to default embedder")
 
+        # 使用默认嵌入器（回退）
+        try:
+            self.embedder = get_default_embedder()
+            self.logger.info(f"Successfully initialized default embedder: {self.embedder.get_model_name()}")
+            return
         except Exception as e:
-            self.logger.error(f"Failed to initialize embedding client: {str(e)}")
-            # 创建一个简单的嵌入器作为回退，始终返回零向量（仅用于测试）
-            self.embedder = self._create_fallback_embedder()
+            self.logger.warning(f"Failed to initialize default embedder: {str(e)}, using fallback embedder")
+
+        # 零向量嵌入器（最后回退）
+        self.logger.warning("Using zero-vector fallback embedder (for testing/development only)")
+        self.embedder = self._create_fallback_embedder()
+        self.logger.info("Fallback embedder initialized")
 
     def _create_fallback_embedder(self):
         """创建简单的回退嵌入器（用于测试或错误情况）"""
-        from app.embedders.base import BaseEmbedder
 
         class FallbackEmbedder(BaseEmbedder):
+            def __init__(self):
+                super().__init__(model_name="fallback-embedder", dimension=1536)
+                self.logger = logger
+
             def embed(self, text):
-                logger.warning("Using fallback embedder - returning zero vector")
+                # 生成固定维度的零向量
+                self.logger.debug(f"Using fallback embedder to embed text: {text[:50]}...")
                 return [0.0] * 1536
 
             def embed_batch(self, texts):
-                logger.warning("Using fallback embedder - returning zero vectors")
+                # 为每个文本生成零向量
+                self.logger.debug(f"Using fallback embedder to embed batch of {len(texts)} texts")
                 return [[0.0] * 1536 for _ in texts]
 
-            def name(self):
+            def get_model_name(self):
                 return "fallback-embedder"
 
         return FallbackEmbedder()
@@ -97,8 +121,8 @@ class DocumentProcessor:
             elif task.type == TaskType.PROCESS_COMPLETE:
                 return self.process_complete(task)
             else:
-                self.logger.error(f"Unknown task type: {task.type}")
-                update_task_status(task, TaskStatus.FAILED, error=f"Unknown task type: {task.type}")
+                self.logger.error(f"Unsupported task type: {task.type}")
+                update_task_status(task, TaskStatus.FAILED, error=f"Unsupported task type: {task.type}")
                 return False
         except Exception as e:
             error_msg = f"Error processing task {task.id}: {str(e)}\n{traceback.format_exc()}"
@@ -124,13 +148,13 @@ class DocumentProcessor:
         try:
             # 解析任务载荷
             if not isinstance(task.payload, dict):
-                payload = json.loads(task.payload) if isinstance(task.payload, (str, bytes)) else {}
+                raise ValueError("Task payload is not a dictionary")
             else:
                 payload = task.payload
 
             # 验证必要字段
             if 'file_path' not in payload:
-                raise ValueError("Missing file_path in task payload")
+                raise ValueError("Missing required field 'file_path' in payload")
 
             file_path = payload.get('file_path')
             file_name = payload.get('file_name', os.path.basename(file_path))
@@ -166,7 +190,7 @@ class DocumentProcessor:
             elapsed = time.time() - start_time
             self.logger.info(f"Document parsing completed in {elapsed:.2f}s. Text length: {len(content)} chars")
 
-            # 更新任务状态为已完成
+            # 更新任务状态为已完成，包括结果
             update_task_status(task, TaskStatus.COMPLETED, result=result.__dict__)
             return True
 
@@ -194,15 +218,15 @@ class DocumentProcessor:
         try:
             # 解析任务载荷
             if not isinstance(task.payload, dict):
-                payload = json.loads(task.payload) if isinstance(task.payload, (str, bytes)) else {}
+                raise ValueError("Task payload is not a dictionary")
             else:
                 payload = task.payload
 
             # 验证必要字段
             if 'content' not in payload:
-                raise ValueError("Missing content in task payload")
+                raise ValueError("Missing required field 'content' in payload")
             if 'document_id' not in payload:
-                raise ValueError("Missing document_id in task payload")
+                raise ValueError("Missing required field 'document_id' in payload")
 
             document_id = payload.get('document_id')
             content = payload.get('content')
@@ -225,8 +249,8 @@ class DocumentProcessor:
             chunk_infos = []
             for i, chunk in enumerate(chunks):
                 chunk_infos.append(ChunkInfo(
-                    text=chunk['text'],
-                    index=chunk['index']
+                    text=chunk["text"],
+                    index=chunk["index"]
                 ))
 
             # 构建结果
@@ -239,7 +263,7 @@ class DocumentProcessor:
             elapsed = time.time() - start_time
             self.logger.info(f"Text chunking completed in {elapsed:.2f}s. Generated {len(chunk_infos)} chunks")
 
-            # 更新任务状态为已完成
+            # 更新任务状态为已完成，包括结果
             update_task_status(task, TaskStatus.COMPLETED, result=result.__dict__)
             return True
 
@@ -267,43 +291,32 @@ class DocumentProcessor:
         try:
             # 解析任务载荷
             if not isinstance(task.payload, dict):
-                payload = json.loads(task.payload) if isinstance(task.payload, (str, bytes)) else {}
+                raise ValueError("Task payload is not a dictionary")
             else:
                 payload = task.payload
 
             # 验证必要字段
             if 'chunks' not in payload:
-                raise ValueError("Missing chunks in task payload")
+                raise ValueError("Missing required field 'chunks' in payload")
             if 'document_id' not in payload:
-                raise ValueError("Missing document_id in task payload")
+                raise ValueError("Missing required field 'document_id' in payload")
 
             document_id = payload.get('document_id')
             chunks = payload.get('chunks', [])
             model = payload.get('model', self.embedding_model)
 
             if not chunks:
-                self.logger.warning(f"No chunks to vectorize for document {document_id}")
-                result = VectorizeResult(
-                    document_id=document_id,
-                    vectors=[],
-                    vector_count=0,
-                    model=model,
-                    dimension=0
-                )
-                update_task_status(task, TaskStatus.COMPLETED, result=result.__dict__)
-                return True
+                raise ValueError("Empty chunks list in payload")
 
             self.logger.info(f"Vectorizing {len(chunks)} chunks for document {document_id}")
 
             # 提取文本
             texts = []
             for chunk in chunks:
-                if isinstance(chunk, dict) and 'text' in chunk:
-                    texts.append(chunk['text'])
-                elif hasattr(chunk, 'text'):
-                    texts.append(chunk.text)
+                if isinstance(chunk, dict):
+                    texts.append(chunk.get("text", ""))
                 else:
-                    raise ValueError(f"Invalid chunk format: {chunk}")
+                    texts.append(chunk.text)
 
             # 批量生成向量
             start_time = time.time()
@@ -314,9 +327,9 @@ class DocumentProcessor:
             dimension = len(vectors[0]) if vectors and vectors[0] else 0
 
             for i, vector in enumerate(vectors):
-                chunk_index = chunks[i]['index'] if isinstance(chunks[i], dict) else chunks[i].index
+                chunk_idx = chunks[i].get('index', i) if isinstance(chunks[i], dict) else chunks[i].index
                 vector_infos.append(VectorInfo(
-                    chunk_index=chunk_index,
+                    chunk_index=chunk_idx,
                     vector=vector
                 ))
 
@@ -332,7 +345,7 @@ class DocumentProcessor:
             elapsed = time.time() - start_time
             self.logger.info(f"Vectorization completed in {elapsed:.2f}s. Generated {len(vector_infos)} vectors with dimension {dimension}")
 
-            # 更新任务状态为已完成
+            # 更新任务状态为已完成，包括结果
             update_task_status(task, TaskStatus.COMPLETED, result=result.__dict__)
             return True
 
@@ -360,15 +373,15 @@ class DocumentProcessor:
         try:
             # 解析任务载荷
             if not isinstance(task.payload, dict):
-                payload = json.loads(task.payload) if isinstance(task.payload, (str, bytes)) else {}
+                raise ValueError("Task payload is not a dictionary")
             else:
                 payload = task.payload
 
             # 验证必要字段
             if 'document_id' not in payload:
-                raise ValueError("Missing document_id in task payload")
+                raise ValueError("Missing required field 'document_id' in payload")
             if 'file_path' not in payload:
-                raise ValueError("Missing file_path in task payload")
+                raise ValueError("Missing required field 'file_path' in payload")
 
             document_id = payload.get('document_id')
             file_path = payload.get('file_path')
@@ -407,8 +420,8 @@ class DocumentProcessor:
             chunk_infos = []
             for i, chunk in enumerate(chunks):
                 chunk_infos.append(ChunkInfo(
-                    text=chunk['text'],
-                    index=chunk['index']
+                    text=chunk["text"],
+                    index=chunk["index"]
                 ))
 
             chunk_elapsed = time.time() - chunk_start_time
@@ -417,17 +430,20 @@ class DocumentProcessor:
 
             # 3. 向量化文本
             if not chunk_infos:
-                self.logger.warning("No chunks to vectorize")
                 vector_status = "skipped"
                 vector_infos = []
                 dimension = 0
+                self.logger.warning("No chunks generated, skipping vectorization")
             else:
+                vector_status = "success"
                 vector_start_time = time.time()
                 self.logger.info("Step 3: Vectorizing text")
 
+                # 提取文本并向量化
                 texts = [chunk.text for chunk in chunk_infos]
                 vectors = self.embedder.embed_batch(texts)
 
+                # 构建向量信息
                 vector_infos = []
                 dimension = len(vectors[0]) if vectors and vectors[0] else 0
 
@@ -439,7 +455,6 @@ class DocumentProcessor:
 
                 vector_elapsed = time.time() - vector_start_time
                 self.logger.info(f"Vectorization completed in {vector_elapsed:.2f}s. Generated {len(vector_infos)} vectors")
-                vector_status = "success"
 
             # 构建结果
             total_elapsed = time.time() - start_time
@@ -456,7 +471,7 @@ class DocumentProcessor:
 
             self.logger.info(f"Complete document processing finished in {total_elapsed:.2f}s")
 
-            # 更新任务状态为已完成
+            # 更新任务状态为已完成，包括结果
             update_task_status(task, TaskStatus.COMPLETED, result=result.__dict__)
             return True
 
@@ -479,7 +494,6 @@ def process_task(task_id: str) -> bool:
     返回:
         bool: 处理成功返回True，失败返回False
     """
-    from app.worker.tasks import get_task_from_redis
 
     # 获取任务信息
     task = get_task_from_redis(task_id)

@@ -1,10 +1,4 @@
-import os
-import time
-import unittest
-from unittest.mock import patch, MagicMock, ANY
-import tempfile
-import json
-from pathlib import Path
+from unittest.mock import patch, MagicMock
 
 import pytest
 import requests

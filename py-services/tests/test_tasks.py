@@ -1,11 +1,8 @@
-import os
 import json
-import time
 import pytest
 from datetime import datetime
 from unittest.mock import patch, MagicMock, ANY
 
-from celery import Task as CeleryTask
 from app.models.model import Task, TaskType, TaskStatus
 from app.worker.tasks import (
     get_redis_client, get_task_from_redis, update_task_status,
