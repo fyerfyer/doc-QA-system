@@ -1,10 +1,10 @@
 import os
-import json
 import time
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, List
+from contextlib import asynccontextmanager
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request, BackgroundTasks, Depends, status
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -26,11 +26,34 @@ from app.worker.tasks import (
 # 初始化日志
 setup_logger(os.getenv("LOG_LEVEL", "INFO"))
 
+# 定义生命周期管理器函数
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """应用生命周期管理"""
+    # 启动时执行的操作
+    logger.info("Document Processing API started")
+    
+    # 检查Redis连接
+    try:
+        client = get_redis_client()
+        if client.ping():
+            logger.info("Successfully connected to Redis")
+        else:
+            logger.error("Failed to ping Redis")
+    except Exception as e:
+        logger.error(f"Error connecting to Redis: {str(e)}")
+        
+    yield
+    
+    # 关闭时执行的操作
+    logger.info("Document Processing API shutting down")
+
 # 创建FastAPI应用
 app = FastAPI(
     title="Document Processing API",
     description="API for document parsing, chunking, and embedding",
     version="1.0.0",
+    lifespan=lifespan,  # 添加 lifespan 参数
 )
 
 # 配置CORS
@@ -77,21 +100,6 @@ class TaskResponse(BaseModel):
     task_id: str
     status: str = "pending"
     task_type: str
-
-# 启动事件
-@app.on_event("startup")
-async def startup_event():
-    """应用启动时执行的操作"""
-    logger.info("Document Processing API started")
-    # 检查Redis连接
-    try:
-        client = get_redis_client()
-        if client.ping():
-            logger.info("Successfully connected to Redis")
-        else:
-            logger.error("Failed to ping Redis")
-    except Exception as e:
-        logger.error(f"Error connecting to Redis: {str(e)}")
 
 # 健康检查端点
 @app.get("/health")
