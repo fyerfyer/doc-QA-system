@@ -1,8 +1,6 @@
 import unittest
-import os
-import sys
 
-from app.chunkers.splitter import TextSplitter, SplitConfig, Chunk, split_text
+from app.chunkers.splitter import TextSplitter, SplitConfig, split_text
 from app.chunkers.semantic_splitter import SemanticSplitter, SemanticSplitConfig, split_text_semantic, _dummy_embedding_func
 from app.chunkers.utils import (
     normalize_text, detect_language, split_sentences, count_tokens,

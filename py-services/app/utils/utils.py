@@ -178,7 +178,11 @@ def get_task_key(task_id: str) -> str:
     返回:
         str: Redis键
     """
-    return f"task:{task_id}"
+    # 防止添加冗余的"task:"前缀
+    if task_id.startswith("task:"):
+        return task_id
+    else:
+        return f"task:{task_id}"
 
 
 def get_document_tasks_key(document_id: str) -> str:

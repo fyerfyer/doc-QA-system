@@ -9,15 +9,15 @@ from celery import shared_task
 from redis.exceptions import RedisError
 
 from app.models.model import (
-    Task, TaskType, TaskStatus,
+    Task, TaskStatus,
     DocumentParsePayload, DocumentParseResult,
     TextChunkPayload, TextChunkResult, ChunkInfo,
     VectorizePayload, VectorizeResult, VectorInfo,
     ProcessCompletePayload, ProcessCompleteResult
 )
 from app.utils.utils import (
-    logger, parse_redis_url, format_task_info, get_task_key,
-    get_document_tasks_key, count_words, count_chars, retry, send_callback
+    logger, parse_redis_url, get_task_key,
+    count_words, count_chars, send_callback
 )
 from app.worker.celery_app import app
 
@@ -83,6 +83,32 @@ def update_task_status(task: Task, status: TaskStatus, result: Any = None, error
             task.completed_at = datetime.now()
 
         if result is not None:
+            # 确保 VectorInfo 对象能被正确序列化
+            if isinstance(result, dict) and "vectors" in result:
+                vectors = result["vectors"]
+                if vectors and hasattr(vectors[0], "__dict__"):
+                    # Convert VectorInfo objects to dictionaries
+                    serializable_vectors = []
+                    for vector_info in vectors:
+                        serializable_vectors.append({
+                            "chunk_index": vector_info.chunk_index,
+                            "vector": vector_info.vector
+                        })
+                    result["vectors"] = serializable_vectors
+
+            # 确保 ChunkInfo 对象能被正确序列化
+            if isinstance(result, dict) and "chunks" in result:
+                chunks = result["chunks"]
+                if chunks and hasattr(chunks[0], "__dict__"):
+                    # Convert ChunkInfo objects to dictionaries
+                    serializable_chunks = []
+                    for chunk_info in chunks:
+                        serializable_chunks.append({
+                            "text": chunk_info.text,
+                            "index": chunk_info.index
+                        })
+                    result["chunks"] = serializable_chunks
+
             task.result = result
 
         if error:
@@ -141,26 +167,26 @@ def parse_document(task_id: str) -> bool:
             raise ValueError("Task payload is not a dictionary")
         else:
             payload = DocumentParsePayload(**task.payload)
-        
+
         logger.info(f"Parsing document: {payload.file_path}")
 
         # 实现文档解析逻辑
         from app.parsers.factory import create_parser, detect_content_type
-        
+
         # 检测内容类型
         mime_type = detect_content_type(payload.file_path)
-        
+
         # 创建对应的解析器
         parser = create_parser(payload.file_path, mime_type)
-        
+
         # 执行解析
         start_time = time.time()
         content = parser.parse(payload.file_path)
-        
+
         # 提取标题和元数据
         title = parser.extract_title(content, payload.file_name)
         meta = parser.get_metadata(payload.file_path)
-        
+
         # 创建结果
         result = DocumentParseResult(
             content=content,
@@ -173,7 +199,7 @@ def parse_document(task_id: str) -> bool:
 
         elapsed = time.time() - start_time
         logger.info(f"Document parse task {task_id} completed in {elapsed:.2f}s")
-        
+
         # 更新任务状态为已完成
         update_task_status(task, TaskStatus.COMPLETED, result.__dict__)
         return True
@@ -213,12 +239,12 @@ def chunk_text(task_id: str) -> bool:
             raise ValueError("Task payload is not a dictionary")
         else:
             payload = TextChunkPayload(**task.payload)
-            
+
         logger.info(f"Chunking text for document: {payload.document_id}")
 
         # 实现文本分块逻辑
         from app.chunkers.splitter import split_text
-        
+
         # 执行分块
         start_time = time.time()
         chunks_data = split_text(
@@ -228,7 +254,7 @@ def chunk_text(task_id: str) -> bool:
             split_type=payload.split_type or "paragraph",
             metadata={"document_id": payload.document_id}
         )
-        
+
         # 转换为ChunkInfo列表
         chunks = [ChunkInfo(text=chunk['text'], index=chunk['index']) for chunk in chunks_data]
 
@@ -241,7 +267,7 @@ def chunk_text(task_id: str) -> bool:
 
         elapsed = time.time() - start_time
         logger.info(f"Text chunking task {task_id} completed in {elapsed:.2f}s: {len(chunks)} chunks created")
-        
+
         # 更新任务状态为已完成
         update_task_status(task, TaskStatus.COMPLETED, result.__dict__)
         return True
@@ -281,15 +307,15 @@ def vectorize_text(task_id: str) -> bool:
             raise ValueError("Task payload is not a dictionary")
         else:
             payload = VectorizePayload(**task.payload)
-            
+
         logger.info(f"Vectorizing text for document: {payload.document_id}, chunks: {len(payload.chunks)}")
 
         # 实现向量化逻辑
         from app.embedders.factory import create_embedder
-        
+
         # 创建嵌入模型
         embedder = create_embedder(payload.model)
-        
+
         # 提取文本 - 修复：处理字典和对象两种情况
         texts = []
         for chunk in payload.chunks:
@@ -303,11 +329,11 @@ def vectorize_text(task_id: str) -> bool:
                 texts.append(chunk.text)
             else:
                 raise ValueError(f"Invalid chunk format: {chunk}")
-        
+
         # 执行向量化
         start_time = time.time()
         vectors_data = embedder.embed_batch(texts)
-        
+
         # 创建向量信息
         dimension = len(vectors_data[0]) if vectors_data else 0
         vectors = []
@@ -326,7 +352,7 @@ def vectorize_text(task_id: str) -> bool:
 
         elapsed = time.time() - start_time
         logger.info(f"Text vectorization task {task_id} completed in {elapsed:.2f}s: {len(vectors)} vectors created")
-        
+
         # 更新任务状态为已完成
         update_task_status(task, TaskStatus.COMPLETED, result.__dict__)
         return True
@@ -366,7 +392,7 @@ def process_document(task_id: str) -> bool:
             raise ValueError("Task payload is not a dictionary")
         else:
             payload = ProcessCompletePayload(**task.payload)
-            
+
         logger.info(f"Processing document: {payload.document_id}, file: {payload.file_path}")
 
         result = ProcessCompleteResult(
@@ -380,18 +406,18 @@ def process_document(task_id: str) -> bool:
         start_time = time.time()
         try:
             from app.parsers.factory import create_parser, detect_content_type
-            
+
             # 检测内容类型
             mime_type = detect_content_type(payload.file_path)
-            
+
             # 创建解析器并解析
             parser = create_parser(payload.file_path, mime_type)
             content = parser.parse(payload.file_path)
-            
+
             # 提取标题和元数据
             title = parser.extract_title(content, payload.file_name)
             meta = parser.get_metadata(payload.file_path)
-            
+
             # 创建解析结果
             parse_result = DocumentParseResult(
                 content=content,
@@ -415,7 +441,7 @@ def process_document(task_id: str) -> bool:
         # 2. 文本分块
         try:
             from app.chunkers.splitter import split_text
-            
+
             # 执行分块
             chunks_data = split_text(
                 text=parse_result.content,
@@ -424,7 +450,7 @@ def process_document(task_id: str) -> bool:
                 split_type=payload.split_type,
                 metadata={"document_id": payload.document_id}
             )
-            
+
             # 转换为ChunkInfo
             chunks = [ChunkInfo(text=chunk['text'], index=chunk['index']) for chunk in chunks_data]
 
@@ -442,18 +468,18 @@ def process_document(task_id: str) -> bool:
         # 3. 向量化
         try:
             from app.embedders.factory import create_embedder
-            
+
             # 创建嵌入模型
             embedder = create_embedder(payload.model)
-            
+
             # 提取文本并向量化
             texts = [chunk.text for chunk in chunks]
             vector_data = embedder.embed_batch(texts)
-            
+
             # 创建向量信息
             dimension = len(vector_data[0]) if vector_data else 0
             vectors = [
-                VectorInfo(chunk_index=chunks[i].index, vector=vec) 
+                VectorInfo(chunk_index=chunks[i].index, vector=vec)
                 for i, vec in enumerate(vector_data)
             ]
 

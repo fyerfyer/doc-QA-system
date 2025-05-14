@@ -4,7 +4,6 @@ import unittest
 from unittest.mock import MagicMock, patch
 from io import StringIO
 
-from app.parsers.base import BaseParser
 from app.parsers.pdf_parser import PDFParser
 from app.parsers.markdown_parser import MarkdownParser
 from app.parsers.text_parser import TextParser

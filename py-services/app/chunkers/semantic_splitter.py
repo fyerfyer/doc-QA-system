@@ -1,15 +1,11 @@
 import logging
 import numpy as np
-from typing import List, Dict, Any, Optional, Callable, Tuple
+from typing import List, Dict, Any, Optional, Callable
 from dataclasses import dataclass, field
 
 # 导入基本分块器和工具函数
-from app.chunkers.splitter import TextSplitter, SplitConfig, Chunk, split_text
-from app.chunkers.utils import (
-    normalize_text, split_sentences, detect_language,
-    find_best_split_point, calculate_overlap, get_chunk_title,
-    estimate_chunk_quality, count_tokens
-)
+from app.chunkers.splitter import TextSplitter, SplitConfig, Chunk
+from app.chunkers.utils import split_sentences, detect_language, count_tokens
 
 # 初始化日志
 logger = logging.getLogger(__name__)

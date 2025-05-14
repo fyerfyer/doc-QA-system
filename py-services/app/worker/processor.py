@@ -4,17 +4,16 @@ import traceback
 
 from app.models.model import (
     Task, TaskType, TaskStatus,
-    DocumentParsePayload, DocumentParseResult,
-    TextChunkPayload, TextChunkResult, ChunkInfo,
-    VectorizePayload, VectorizeResult, VectorInfo,
-    ProcessCompletePayload, ProcessCompleteResult
+    DocumentParseResult,TextChunkResult,
+    ChunkInfo, VectorizeResult,
+    VectorInfo,ProcessCompleteResult
 )
 
 from app.parsers.factory import create_parser, detect_content_type
-from app.chunkers.splitter import split_text, TextSplitter, SplitConfig
+from app.chunkers.splitter import split_text
 from app.embedders.factory import create_embedder, get_default_embedder
-from app.utils.utils import logger, send_callback, retry, count_words, count_chars
-from app.worker.tasks import get_redis_client, update_task_status
+from app.utils.utils import logger, count_words, count_chars
+from app.worker.tasks import update_task_status
 from app.embedders.base import BaseEmbedder
 from app.worker.tasks import get_task_from_redis
 
@@ -24,12 +23,12 @@ class DocumentProcessor:
     def __init__(self):
         """初始化文档处理器"""
         self.logger = logger
-        
+
         # 确保环境变量已配置
         self.dashscope_api_key = os.getenv("DASHSCOPE_API_KEY", "")
         self.embedding_model = os.getenv("EMBEDDING_MODEL", "text-embedding-v3")
         self.callback_url = os.getenv("CALLBACK_URL", "http://localhost:8080/api/tasks/callback")
-        
+
         # 设置代理配置（用于HuggingFace）
         self.proxies = {
             "http": "http://127.0.0.1:7897",
@@ -405,7 +404,7 @@ class DocumentProcessor:
 
             parse_elapsed = time.time() - start_time
             self.logger.info(f"Document parsing completed in {parse_elapsed:.2f}s. Text length: {len(content)} chars")
-            parse_status = "success"
+            parse_status = "completed"
 
             # 2. 分块文本
             chunk_start_time = time.time()
@@ -426,7 +425,7 @@ class DocumentProcessor:
 
             chunk_elapsed = time.time() - chunk_start_time
             self.logger.info(f"Text chunking completed in {chunk_elapsed:.2f}s. Generated {len(chunk_infos)} chunks")
-            chunk_status = "success"
+            chunk_status = "completed"
 
             # 3. 向量化文本
             if not chunk_infos:
@@ -435,7 +434,7 @@ class DocumentProcessor:
                 dimension = 0
                 self.logger.warning("No chunks generated, skipping vectorization")
             else:
-                vector_status = "success"
+                vector_status = "completed"
                 vector_start_time = time.time()
                 self.logger.info("Step 3: Vectorizing text")
 

@@ -2,12 +2,7 @@ import pytest
 from datetime import datetime
 
 from unittest.mock import patch, MagicMock
-from app.models.model import Task, TaskType, TaskStatus, ChunkInfo, VectorInfo
-from app.worker.tasks import (
-    get_redis_client, get_task_from_redis, update_task_status,
-    parse_document, chunk_text, vectorize_text, process_document
-)
-from app.utils.utils import get_task_key, get_document_tasks_key
+from app.models.model import Task, TaskType, TaskStatus
 
 # 测试客户端
 app.include_router(router)
@@ -57,7 +52,7 @@ def test_handle_callback_success(mock_get_task_from_redis, mock_update_task_stat
     """测试成功处理回调请求"""
     # 模拟任务存在
     mock_get_task_from_redis.return_value = sample_task
-    
+
     # 模拟更新成功
     mock_update_task_status.return_value = True
 
@@ -208,11 +203,11 @@ def test_get_document_tasks(mock_redis_client, mock_get_task_from_redis, sample_
     # 创建一个Redis客户端的模拟
     mock_client = MagicMock()
     mock_redis_client.return_value = mock_client
-    
+
     # 模拟Redis中的文档任务集合
     task_ids = [b"task1", b"task2", b"task3"]
     mock_client.smembers.return_value = task_ids
-    
+
     # 模拟获取任务详情
     mock_get_task_from_redis.side_effect = lambda task_id: Task(
         id=task_id,
@@ -239,7 +234,7 @@ def test_get_document_tasks_empty(mock_redis_client):
     # 创建一个Redis客户端的模拟
     mock_client = MagicMock()
     mock_redis_client.return_value = mock_client
-    
+
     # 模拟Redis中没有文档任务
     mock_client.smembers.return_value = []
 

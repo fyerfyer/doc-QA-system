@@ -1,6 +1,6 @@
 import os
 import logging
-from typing import BinaryIO, Dict, Any, Optional
+from typing import BinaryIO, Dict, Any
 
 import pypdf
 from pypdf.errors import PdfReadError

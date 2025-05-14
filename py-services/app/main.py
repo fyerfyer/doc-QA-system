@@ -11,13 +11,10 @@ from pydantic import BaseModel, Field
 
 from app.models.model import (
     Task, TaskType, TaskStatus,
-    DocumentParsePayload, DocumentParseResult,
-    TextChunkPayload, TextChunkResult,
-    VectorizePayload, VectorizeResult,
-    ProcessCompletePayload, ProcessCompleteResult
+    DocumentParsePayload, TextChunkPayload,
+    VectorizePayload, ProcessCompletePayload
 )
-from app.utils.utils import setup_logger, logger, parse_redis_url, get_task_key
-from app.worker.celery_app import app as celery_app
+from app.utils.utils import setup_logger, logger, get_task_key
 from app.worker.tasks import (
     parse_document, chunk_text, vectorize_text, process_document,
     get_redis_client, get_task_from_redis
@@ -32,7 +29,7 @@ async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     # 启动时执行的操作
     logger.info("Document Processing API started")
-    
+
     # 检查Redis连接
     try:
         client = get_redis_client()
@@ -42,9 +39,9 @@ async def lifespan(app: FastAPI):
             logger.error("Failed to ping Redis")
     except Exception as e:
         logger.error(f"Error connecting to Redis: {str(e)}")
-        
+
     yield
-    
+
     # 关闭时执行的操作
     logger.info("Document Processing API shutting down")
 

@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import Dict, Any, Optional, List, Union
+from typing import Dict, Any, List
 
 from app.embedders.base import BaseEmbedder
 from app.embedders.tongyi import TongyiEmbedder

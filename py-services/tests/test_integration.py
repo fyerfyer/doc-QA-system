@@ -1,15 +1,8 @@
 import os
-import sys
-import json
-import time
 import uuid
 import pytest
 import shutil
 import tempfile
-from pathlib import Path
-
-# 确保能导入应用模块
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import redis
 from minio import Minio
@@ -20,16 +13,16 @@ from app.models.model import (
     DocumentParsePayload, TextChunkPayload, VectorizePayload
 )
 from app.parsers.factory import create_parser
-from app.chunkers.splitter import TextSplitter
+from app.chunkers.splitter import TextSplitter, Chunk
 from app.embedders.factory import get_default_embedder
 from app.worker.processor import DocumentProcessor
-from app.utils.utils import setup_logger
+from app.utils.utils import setup_logger, logger
 
 # 加载环境变量
 load_dotenv()
 
 # 设置日志记录器
-logger = setup_logger("INFO")
+setup_logger("INFO")
 
 # 定义测试常量
 TEST_REDIS_URL = os.environ.get("TEST_REDIS_URL", "redis://localhost:6379/0")
@@ -76,6 +69,9 @@ class TestIntegration:
 
         except Exception as e:
             pytest.fail(f"Failed to connect to MinIO: {str(e)}")
+
+        # 设置回调函数URL
+        os.environ["CALLBACK_URL"] = "http://callback-mock:8080/api/tasks/callback"
 
         # 创建测试文件
         cls.create_test_files()
@@ -184,12 +180,12 @@ class TestIntegration:
 
         assert chunks is not None, "Chunks should not be None"
         assert len(chunks) > 0, "Should create at least one chunk"
-        assert isinstance(chunks[0], dict), "Chunk should be a dictionary"
-        assert "text" in chunks[0], "Chunk should have text field"
+        assert isinstance(chunks[0], Chunk), "Chunk should be a Chunk object"
+        assert hasattr(chunks[0], "text"), "Chunk should have text field"
         assert len(chunks) >= 3, "Should create at least 3 chunks for this text"
 
         # 检查分块内容
-        all_content = " ".join([c["text"] for c in chunks])
+        all_content = " ".join([c.text for c in chunks])
         assert "test document" in all_content, "All content should contain original text"
         assert "third paragraph" in all_content, "All content should contain third paragraph"
 

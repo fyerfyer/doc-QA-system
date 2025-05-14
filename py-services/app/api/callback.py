@@ -4,8 +4,8 @@ from typing import Dict, Any
 
 from fastapi import APIRouter, Request
 
-from app.models.model import TaskType, TaskStatus, Task, TaskCallback
-from app.utils.utils import logger, get_task_key, get_document_tasks_key
+from app.models.model import TaskType, TaskStatus
+from app.utils.utils import logger, get_document_tasks_key
 from app.worker.tasks import get_redis_client, get_task_from_redis, update_task_status
 
 # 创建路由器

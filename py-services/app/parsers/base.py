@@ -1,7 +1,7 @@
 import os
 import logging
 from abc import ABC, abstractmethod
-from typing import Optional, Dict, Any, IO, BinaryIO
+from typing import Dict, Any, BinaryIO
 from pathlib import Path
 
 

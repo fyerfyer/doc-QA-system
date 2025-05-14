@@ -1,7 +1,6 @@
 import logging
 from typing import List, Dict, Any, Optional
 import torch
-import os
 
 from app.embedders.base import BaseEmbedder
 
@@ -73,7 +72,7 @@ class HuggingFaceEmbedder(BaseEmbedder):
             original_http_proxy = os.environ.get('HTTP_PROXY')
             original_https_proxy = os.environ.get('HTTPS_PROXY')
             original_hf_offline = os.environ.get('TRANSFORMERS_OFFLINE')
-            
+
             try:
                 # 设置代理环境变量
                 if self.proxies:
@@ -81,25 +80,25 @@ class HuggingFaceEmbedder(BaseEmbedder):
                         os.environ['HTTP_PROXY'] = self.proxies['http']
                     if 'https' in self.proxies:
                         os.environ['HTTPS_PROXY'] = self.proxies['https']
-                
+
                 # 设置离线模式环境变量
                 if self.local_files_only:
                     os.environ['TRANSFORMERS_OFFLINE'] = '1'
                     os.environ['HF_DATASETS_OFFLINE'] = '1'
-                
+
                 self.logger.info(f"Loading model '{self.model_name}' to {self.device}...")
-                
+
                 # SentenceTransformer不接受proxies参数，只接受device
                 self.model = SentenceTransformer(
-                    self.model_name, 
+                    self.model_name,
                     device=self.device
                 )
-                
+
                 # 更新嵌入维度为实际值
                 self.dimension = self.model.get_sentence_embedding_dimension()
-                
+
                 self.logger.info(f"Model loaded successfully with embedding dimension: {self.dimension}")
-            
+
             finally:
                 # 恢复原始环境变量
                 if self.proxies:
@@ -107,19 +106,19 @@ class HuggingFaceEmbedder(BaseEmbedder):
                         os.environ['HTTP_PROXY'] = original_http_proxy
                     elif 'HTTP_PROXY' in os.environ:
                         del os.environ['HTTP_PROXY']
-                        
+
                     if original_https_proxy:
                         os.environ['HTTPS_PROXY'] = original_https_proxy
                     elif 'HTTPS_PROXY' in os.environ:
                         del os.environ['HTTPS_PROXY']
-                
+
                 # 恢复离线模式环境变量
                 if self.local_files_only:
                     if original_hf_offline:
                         os.environ['TRANSFORMERS_OFFLINE'] = original_hf_offline
                     elif 'TRANSFORMERS_OFFLINE' in os.environ:
                         del os.environ['TRANSFORMERS_OFFLINE']
-                    
+
                     if 'HF_DATASETS_OFFLINE' in os.environ:
                         del os.environ['HF_DATASETS_OFFLINE']
 

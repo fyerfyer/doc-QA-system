@@ -6,8 +6,7 @@ from dataclasses import dataclass
 
 from app.chunkers.utils import (
     normalize_text, split_sentences, detect_language,
-    find_best_split_point, calculate_overlap, get_chunk_title,
-    estimate_chunk_quality, count_tokens
+    find_best_split_point, estimate_chunk_quality, count_tokens
 )
 
 # 初始化日志
