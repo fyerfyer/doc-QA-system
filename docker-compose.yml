@@ -1,41 +1,142 @@
 version: '3.8'
 
 services:
-  backend:
+  # Go API服务
+  go-api:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: docqa-backend
+    image: docqa-go-api:latest
+    container_name: docqa-go-api
+    restart: unless-stopped
     environment:
-      - TONGYI_API_KEY=${TONGYI_API_KEY}
       - GIN_MODE=release
-      - PORT=8080
-      - STORAGE_PATH=/app/data/files
-      - VECTORDB_PATH=/app/data/vectordb/faiss_index
-      - DATA_DIR=/app/data
-      - LOG_LEVEL=info
-      - LOG_OUTPUT=both
-      - LOG_DIR=/app/logs
+      - DB_TYPE=sqlite
+      - DB_DSN=/app/data/database.db
+      - REDIS_URL=redis://redis:6379/0
+      - EMBEDDING_MODEL=default
+      - CALLBACK_URL=http://go-api:8080/api/tasks/callback
+      - PYTHONSERVICE_URL=http://py-api:8000
     volumes:
-      - docqa-data:/app/data
-      - docqa-logs:/app/logs
+      - ./data:/app/data
+      - ./logs:/app/logs
     ports:
       - "8080:8080"
-    restart: unless-stopped
-
-  frontend:
-    build:
-      context: ./doc-vue
-      dockerfile: Dockerfile
-    container_name: docqa-frontend
-    ports:
-      - "80:80"
     depends_on:
-      - backend
+      - redis
+    networks:
+      - docqa-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # Python API服务
+  py-api:
+    build:
+      context: ./py-services
+      dockerfile: Dockerfile.api
+    image: docqa-py-api:latest
+    container_name: docqa-py-api
     restart: unless-stopped
+    environment:
+      - LOG_LEVEL=INFO
+      - REDIS_URL=redis://redis:6379/0
+      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY:-your_api_key_here}
+      - EMBEDDING_MODEL=text-embedding-v3
+      - CALLBACK_URL=http://go-api:8080/api/tasks/callback
+    volumes:
+      - ./data:/app/data:ro
+      - ./logs:/app/logs
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
+    networks:
+      - docqa-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # Python Worker服务
+  py-worker:
+    build:
+      context: ./py-services
+      dockerfile: Dockerfile.worker
+    image: docqa-py-worker:latest
+    container_name: docqa-py-worker
+    restart: unless-stopped
+    environment:
+      - LOG_LEVEL=INFO
+      - REDIS_URL=redis://redis:6379/0
+      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY:-your_api_key_here}
+      - EMBEDDING_MODEL=text-embedding-v3
+      - CALLBACK_URL=http://go-api:8080/api/tasks/callback
+    volumes:
+      - ./data:/app/data:ro
+      - ./logs:/app/logs
+    depends_on:
+      - redis
+      - py-api
+    networks:
+      - docqa-network
+    healthcheck:
+      test: ["CMD", "celery", "-A", "app.worker.celery_app", "inspect", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # Redis服务 - 用于任务队列和缓存
+  redis:
+    image: redis:7-alpine
+    container_name: docqa-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - docqa-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # MinIO服务 - 用于文件存储（可选）
+  minio:
+    image: minio/minio:latest
+    container_name: docqa-minio
+    restart: unless-stopped
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    command: server /data --console-address ":9001"
+    networks:
+      - docqa-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  docqa-network:
+    driver: bridge
 
 volumes:
-  docqa-data:
+  redis-data:
     driver: local
-  docqa-logs:                         # 添加日志卷
+  minio-data:
     driver: local
