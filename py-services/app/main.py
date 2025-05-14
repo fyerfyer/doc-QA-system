@@ -19,6 +19,9 @@ from app.worker.tasks import (
     parse_document, chunk_text, vectorize_text, process_document,
     get_redis_client, get_task_from_redis
 )
+from app.api.health import router as health_router
+from app.api.callback import router as callback_router
+from app.utils.router_display import print_routes
 
 # 初始化日志
 setup_logger(os.getenv("LOG_LEVEL", "INFO"))
@@ -39,6 +42,9 @@ async def lifespan(app: FastAPI):
             logger.error("Failed to ping Redis")
     except Exception as e:
         logger.error(f"Error connecting to Redis: {str(e)}")
+
+    # 获取并打印所有API路由
+    print_routes(app, logger)
 
     yield
 
@@ -61,6 +67,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Include the API routers
+app.include_router(health_router)
+app.include_router(callback_router)
 
 # API请求模型
 class DocumentParseRequest(BaseModel):

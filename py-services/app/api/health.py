@@ -1,5 +1,5 @@
-from fastapi import APIRouter
-from typing import Dict, Any
+from fastapi import APIRouter, Request
+from typing import Dict, Any, List
 import platform
 import psutil
 import time
@@ -84,3 +84,35 @@ async def ping():
     返回pong响应，可用于简单的可用性检测
     """
     return {"ping": "pong"}
+
+@router.get("/routes")
+async def get_routes(request: Request):
+    """
+    获取所有可用的API路由
+
+    返回所有注册的路由及其支持的HTTP方法
+    """
+    app = request.app
+    host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", "8000"))
+    base_url = f"http://{host}:{port}"
+    
+    routes_data = []
+    
+    for route in sorted(app.routes, key=lambda r: getattr(r, "path", "")):
+        path = getattr(route, "path", None)
+        if path:
+            methods = getattr(route, "methods", ["GET"])
+            routes_data.append({
+                "path": path,
+                "url": f"{base_url}{path}",
+                "methods": list(methods),
+                "name": getattr(route, "name", ""),
+                "tags": getattr(route, "tags", [])
+            })
+    
+    return {
+        "routes": routes_data,
+        "count": len(routes_data),
+        "base_url": base_url
+    }

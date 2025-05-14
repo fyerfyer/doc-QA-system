@@ -1,72 +1,87 @@
 version: '3.8'
 
 services:
-  # MinIO 对象存储服务
+  # Redis for cache and task queue
+  redis:
+    image: redis:7-alpine
+    container_name: docqa-test-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+
+  # MinIO for object storage
   minio:
-    image: minio/minio
-    container_name: docqa-minio
+    image: minio/minio:latest
+    container_name: docqa-test-minio
     ports:
       - "9000:9000"
-      - "9001:9001"  # 用于MinIO控制台
+      - "9001:9001"
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
-    volumes:
-      - minio_data:/data
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
     command: server /data --console-address ":9001"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 10s
+      interval: 5s
       timeout: 5s
       retries: 3
+    volumes:
+      - minio_data:/data
 
-  # 创建MinIO桶的服务
-  createbuckets:
-    image: minio/mc
-    container_name: docqa-create-buckets
+  # Python Worker service
+  py-worker:
+    build:
+      context: ../../py-services
+      dockerfile: Dockerfile.worker
+    container_name: docqa-test-py-worker
     depends_on:
+      - redis
       - minio
-    entrypoint: >
-      /bin/sh -c "
-      sleep 5;
-      /usr/bin/mc config host add myminio http://minio:9000 minioadmin minioadmin;
-      /usr/bin/mc mb myminio/docqa-test --ignore-existing;
-      /usr/bin/mc policy set public myminio/docqa-test;
-      exit 0;
-      "
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - MINIO_BUCKET=docqa-test
+      - LOG_LEVEL=DEBUG
+      - CALLBACK_URL=http://localhost:8080/api/tasks/callback
+    volumes:
+      - ./.env:/app/.env
+    restart: unless-stopped
 
-  # Redis 缓存服务
-  redis:
-    image: redis:alpine
-    container_name: docqa-redis
+  py-api:
+    build:
+      context: ../../py-services
+      dockerfile: Dockerfile.api  # Create a separate Dockerfile for the API
+    container_name: docqa-test-py-api
+    depends_on:
+      - redis
+      - minio
+      - py-worker
     ports:
-      - "6379:6379"
+      - "8000:8000"
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - MINIO_BUCKET=docqa-test
+      - LOG_LEVEL=DEBUG
     volumes:
-      - redis_data:/data
-    command: redis-server --appendonly yes
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
+      - ./.env:/app/.env
+    restart: unless-stopped
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --log-level info
 
-  # 创建用于测试的数据目录
-  datadir:
-    image: busybox
-    container_name: docqa-datadir
-    volumes:
-      - docqa_data:/data
-    command: >
-      /bin/sh -c "
-      mkdir -p /data/files /data/vectordb /data/db;
-      chmod -R 777 /data;
-      tail -f /dev/null
-      "
+networks:
+  default:
+    name: docqa-test-network
 
 volumes:
   minio_data:
-    name: docqa-minio-data
-  redis_data:
-    name: docqa-redis-data
-  docqa_data:
-    name: docqa-data
+    driver: local

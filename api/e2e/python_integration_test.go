@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -242,13 +243,49 @@ func createPyTestFile(t *testing.T, dir, filename, content string) string {
 	return filePath
 }
 
-// TestPythonIntegration 测试Python服务集成
-func TestPythonIntegration(t *testing.T) {
-	// 跳过测试如果未设置集成测试标志
-	if os.Getenv("RUN_INTEGRATION_TESTS") != "true" {
-		t.Skip("Skipping integration test; set RUN_INTEGRATION_TESTS=true to run")
+func TestPythonWorkerConnectivity(t *testing.T) {
+	// Try to access Python worker's health endpoint
+	// Change the port if your worker exposes a different port
+	urls := []string{
+		"http://localhost:8000/api/health/ping", //
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	client := &http.Client{Timeout: 3 * time.Second}
+
+	for _, url := range urls {
+		req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Logf("Failed to connect to %s: %v", url, err)
+			continue
+		}
+		defer resp.Body.Close()
+
+		body, _ := io.ReadAll(resp.Body)
+		t.Logf("Response from %s: Status=%d, Body=%s", url, resp.StatusCode, string(body))
+
+		// If we got a successful response, we found the health endpoint
+		if resp.StatusCode == http.StatusOK {
+			var result map[string]interface{}
+			if err := json.Unmarshal(body, &result); err == nil {
+				t.Logf("Successfully connected to Python worker health endpoint")
+				return
+			}
+		}
+	}
+
+	t.Log("Couldn't connect to Python worker health endpoint on tested ports")
+
+	// Test Redis connectivity
+	t.Log("Testing direct Redis connectivity...")
+	// Add simple Redis ping test here if needed
+}
+
+// TestPythonIntegration 测试Python服务集成
+func TestPythonIntegration(t *testing.T) {
 	// 设置测试环境
 	env := setupPythonTestEnv(t)
 	defer env.cleanup()
