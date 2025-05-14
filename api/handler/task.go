@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/fyerfyer/doc-QA-system/api/middleware"
@@ -13,50 +14,60 @@ import (
 
 // TaskHandler 处理任务相关的API请求
 type TaskHandler struct {
-    queue     taskqueue.Queue              // 任务队列
-    processor *taskqueue.CallbackProcessor // 回调处理器
-    logger    *logrus.Logger               // 日志记录器
+	queue     taskqueue.Queue              // 任务队列
+	processor *taskqueue.CallbackProcessor // 回调处理器
+	logger    *logrus.Logger               // 日志记录器
 }
 
 // NewTaskHandler 创建新的任务处理器
 func NewTaskHandler(queue taskqueue.Queue) *TaskHandler {
-    logger := middleware.GetLogger()
-    return &TaskHandler{
-        queue:     queue,
-        processor: taskqueue.NewCallbackProcessor(queue, logger),
-        logger:    logger,
-    }
+	logger := middleware.GetLogger()
+	return &TaskHandler{
+		queue:     queue,
+		processor: taskqueue.NewCallbackProcessor(queue, logger),
+		logger:    logger,
+	}
 }
 
 // HandleCallback 处理任务回调请求
 // POST /api/tasks/callback
 func (h *TaskHandler) HandleCallback(c *gin.Context) {
-    var req taskqueue.CallbackRequest
-    if err := c.ShouldBindJSON(&req); err != nil {
-        h.logger.WithError(err).Warn("Invalid callback request")
-        c.JSON(http.StatusBadRequest, model.NewErrorResponse(
-            http.StatusBadRequest,
-            "无效的回调请求",
-        ))
-        return
-    }
+	var req taskqueue.CallbackRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		h.logger.WithError(err).Warn("Invalid callback request")
+		c.JSON(http.StatusBadRequest, model.NewErrorResponse(
+			http.StatusBadRequest,
+			"无效的回调请求",
+		))
+		return
+	}
 
-    h.logger.WithFields(logrus.Fields{
-        "task_id":     req.TaskID,
-        "document_id": req.DocumentID,
-        "status":      req.Status,
-    }).Info("Received task callback")
+	// 添加必要字段验证
+	if req.TaskID == "" {
+		h.logger.Warn("Empty task_id in callback request")
+		c.JSON(http.StatusBadRequest, model.NewErrorResponse(
+			http.StatusBadRequest,
+			"任务ID不能为空",
+		))
+		return
+	}
 
-    // 使用处理器处理回调
-    resp, err := h.processor.HandleCallback(c.Request.Context(), &req)
-    if err != nil {
-        h.logger.WithError(err).Error("Failed to process callback")
-        c.JSON(http.StatusInternalServerError, model.NewErrorResponse(
-            http.StatusInternalServerError,
-            "处理回调失败: "+err.Error(),
-        ))
-        return
-    }
+	h.logger.WithFields(logrus.Fields{
+		"task_id":     req.TaskID,
+		"document_id": req.DocumentID,
+		"status":      req.Status,
+	}).Info("Received task callback")
+
+	// 使用处理器处理回调
+	resp, err := h.processor.HandleCallback(c.Request.Context(), &req)
+	if err != nil {
+		h.logger.WithError(err).Error("Failed to process callback")
+		c.JSON(http.StatusInternalServerError, model.NewErrorResponse(
+			http.StatusInternalServerError,
+			"处理回调失败: "+err.Error(),
+		))
+		return
+	}
 
 	c.JSON(http.StatusOK, model.NewSuccessResponse(resp))
 }
@@ -75,6 +86,15 @@ func (h *TaskHandler) GetTaskStatus(c *gin.Context) {
 
 	task, err := h.queue.GetTask(c.Request.Context(), taskID)
 	if err != nil {
+		// 检查是否是任务不存在错误
+		if errors.Is(err, taskqueue.ErrTaskNotFound) {
+			c.JSON(http.StatusNotFound, model.NewErrorResponse(
+				http.StatusNotFound,
+				"任务未找到",
+			))
+			return
+		}
+
 		h.logger.WithError(err).WithField("task_id", taskID).Error("Failed to get task")
 		c.JSON(http.StatusInternalServerError, model.NewErrorResponse(
 			http.StatusInternalServerError,

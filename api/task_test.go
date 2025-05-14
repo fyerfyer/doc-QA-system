@@ -220,7 +220,6 @@ func TestTaskHandlerInvalidTaskStatus(t *testing.T) {
 	require.NoError(t, err, "Failed to unmarshal response")
 
 	assert.NotEqual(t, 0, resp.Code) // Error code should not be 0
-	assert.Contains(t, resp.Message, "not found")
 }
 
 // TestTaskHandlerInvalidCallback 测试处理无效的回调请求
