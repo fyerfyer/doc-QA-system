@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Request
-from typing import Dict, Any, List
+from typing import Dict, Any
 import platform
 import psutil
 import time

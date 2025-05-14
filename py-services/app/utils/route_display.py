@@ -1,5 +1,4 @@
 import os
-from typing import List
 from fastapi import FastAPI
 
 def print_routes(app: FastAPI, logger=None):

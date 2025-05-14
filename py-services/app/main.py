@@ -21,7 +21,7 @@ from app.worker.tasks import (
 )
 from app.api.health import router as health_router
 from app.api.callback import router as callback_router
-from app.utils.router_display import print_routes
+from app.utils.route_display import print_routes
 
 # 初始化日志
 setup_logger(os.getenv("LOG_LEVEL", "INFO"))
