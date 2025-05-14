@@ -211,6 +211,11 @@ func (q *RedisQueue) GetTasksByDocument(ctx context.Context, documentID string) 
 
 // WaitForTask 等待任务完成并返回结果
 func (q *RedisQueue) WaitForTask(ctx context.Context, taskID string, timeout time.Duration) (*Task, error) {
+	// q.logger.WithFields(logrus.Fields{
+	// 	"task_id": taskID,
+	// 	"timeout": timeout,
+	// }).Info("Starting to wait for task completion")
+
 	if timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, timeout)
@@ -220,17 +225,28 @@ func (q *RedisQueue) WaitForTask(ctx context.Context, taskID string, timeout tim
 	// 初始检查任务状态
 	task, err := q.GetTask(ctx, taskID)
 	if err != nil {
+		q.logger.WithError(err).Error("Failed to get task in WaitForTask")
 		return nil, err
 	}
 
+	// q.logger.WithFields(logrus.Fields{
+	// 	"task_id": taskID,
+	// 	"status":  task.Status,
+	// }).Info("Initial task status check")
+
 	// 如果任务已完成或失败，直接返回
 	if task.Status == StatusCompleted || task.Status == StatusFailed {
+		// q.logger.WithFields(logrus.Fields{
+		// 	"task_id": taskID,
+		// 	"status":  task.Status,
+		// }).Info("Task already completed or failed, returning immediately")
 		return task, nil
 	}
 
 	// 使用发布/订阅监听任务状态变化
 	pubsub := q.redisClient.Subscribe(ctx, "task_status:"+taskID)
 	defer pubsub.Close()
+	q.logger.WithField("channel", "task_status:"+taskID).Info("Subscribed to task status channel")
 
 	// 每1秒轮询一次任务状态
 	ticker := time.NewTicker(time.Second)
@@ -239,14 +255,46 @@ func (q *RedisQueue) WaitForTask(ctx context.Context, taskID string, timeout tim
 	for {
 		select {
 		case <-ctx.Done():
+			// q.logger.WithField("task_id", taskID).Error("Task wait timed out")
 			return nil, ErrTaskTimeout
-		case <-ticker.C:
+		case <-pubsub.Channel():
+			// q.logger.WithFields(logrus.Fields{
+			// 	"task_id": taskID,
+			// 	"channel": msg.Channel,
+			// 	"payload": msg.Payload,
+			// }).Info("Received message from pubsub channel")
+
 			task, err := q.GetTask(ctx, taskID)
 			if err != nil {
+				q.logger.WithError(err).Error("Failed to get task after pubsub notification")
 				return nil, err
 			}
 
 			if task.Status == StatusCompleted || task.Status == StatusFailed {
+				// q.logger.WithFields(logrus.Fields{
+				// 	"task_id": taskID,
+				// 	"status":  task.Status,
+				// }).Info("Task completed after pubsub notification")
+				return task, nil
+			}
+		case <-ticker.C:
+			// q.logger.WithField("task_id", taskID).Debug("Polling task status")
+			task, err := q.GetTask(ctx, taskID)
+			if err != nil {
+				q.logger.WithError(err).Error("Failed to get task during polling")
+				return nil, err
+			}
+
+			// q.logger.WithFields(logrus.Fields{
+			// 	"task_id": taskID,
+			// 	"status":  task.Status,
+			// }).Debug("Task status during polling")
+
+			if task.Status == StatusCompleted || task.Status == StatusFailed {
+				// q.logger.WithFields(logrus.Fields{
+				// 	"task_id": taskID,
+				// 	"status":  task.Status,
+				// }).Info("Task completed during polling")
 				return task, nil
 			}
 		}
@@ -357,7 +405,19 @@ func (q *RedisQueue) UpdateTaskStatus(ctx context.Context, taskID string, status
 		task.Error = errMsg
 	}
 
-	return q.saveTaskToRedis(ctx, task)
+	// 保存更新后的任务状态
+	err = q.saveTaskToRedis(ctx, task)
+	if err != nil {
+		return err
+	}
+
+	// 状态更新成功后自动发送通知
+	if err := q.NotifyTaskUpdate(ctx, taskID); err != nil {
+		q.logger.WithError(err).WithField("task_id", taskID).Warn("Failed to notify task update")
+		// 通知失败通常不应该阻止整个操作成功，所以这里只记录日志而不返回错误
+	}
+
+	return nil
 }
 
 // NotifyTaskUpdate 通知任务状态更新

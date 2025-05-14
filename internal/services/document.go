@@ -483,13 +483,23 @@ func (s *DocumentService) GetDocumentStatus(ctx context.Context, fileID string) 
 
 // WaitForDocumentProcessing 等待文档处理完成
 func (s *DocumentService) WaitForDocumentProcessing(ctx context.Context, fileID string, timeout time.Duration) error {
+	// s.logger.WithFields(logrus.Fields{
+	//     "file_id": fileID,
+	//     "timeout": timeout,
+	//     "async_enabled": s.asyncEnabled,
+	//     "task_queue_initialized": s.taskQueue != nil,
+	//     "repo_initialized": s.repo != nil,
+	// }).Info("Waiting for document processing")
+
 	// 确保初始化完成
 	if err := s.Init(); err != nil {
+		s.logger.WithError(err).Error("Failed to initialize document service")
 		return err
 	}
 
 	if !s.asyncEnabled || s.taskQueue == nil {
 		// 如果未启用异步处理，直接检查文档状态
+		// s.logger.Info("Async processing not enabled, checking document status directly")
 		status, err := s.statusManager.GetStatus(ctx, fileID)
 		if err != nil {
 			return err
@@ -511,6 +521,7 @@ func (s *DocumentService) WaitForDocumentProcessing(ctx context.Context, fileID 
 	}
 
 	// 获取文档相关的任务
+	// s.logger.WithField("document_id", fileID).Info("Getting document tasks")
 	tasks, err := s.repo.GetDocumentTasks(ctx, fileID)
 	if err != nil {
 		return fmt.Errorf("failed to get document tasks: %w", err)
@@ -523,6 +534,13 @@ func (s *DocumentService) WaitForDocumentProcessing(ctx context.Context, fileID 
 	// 找到最新的处理任务
 	var latestTask *taskqueue.Task
 	for _, task := range tasks {
+		// s.logger.WithFields(logrus.Fields{
+		//     "task_id": task.ID,
+		//     "task_type": task.Type,
+		//     "task_status": task.Status,
+		//     "created_at": task.CreatedAt,
+		// }).Info("Task details")
+
 		if task.Type == taskqueue.TaskProcessComplete {
 			if latestTask == nil || task.CreatedAt.After(latestTask.CreatedAt) {
 				latestTask = task
@@ -534,25 +552,38 @@ func (s *DocumentService) WaitForDocumentProcessing(ctx context.Context, fileID 
 		return fmt.Errorf("no complete processing task found for document %s", fileID)
 	}
 
+	// s.logger.WithFields(logrus.Fields{
+	//     "task_id": latestTask.ID,
+	//     "task_status": latestTask.Status,
+	// }).Info("Waiting for task to complete")
+
 	// 等待任务完成
 	_, err = s.taskQueue.WaitForTask(ctx, latestTask.ID, timeout)
 	if err != nil {
+		s.logger.WithError(err).Error("Failed to wait for task")
 		return fmt.Errorf("failed to wait for document processing: %w", err)
 	}
 
 	// 再次检查文档状态
 	status, err := s.statusManager.GetStatus(ctx, fileID)
 	if err != nil {
+		s.logger.WithError(err).Error("Failed to get document status after waiting")
 		return err
 	}
 
+	// s.logger.WithField("status", status).Info("Document status after waiting")
+
 	if status == models.DocStatusFailed {
+		s.logger.Error("Document processing failed after waiting")
 		return fmt.Errorf("document processing failed")
 	}
 
 	if status != models.DocStatusCompleted {
+		s.logger.WithField("status", status).Error("Document processing incomplete after waiting")
 		return fmt.Errorf("document processing incomplete")
 	}
+
+	// s.logger.Info("Document processing completed successfully")
 
 	return nil
 }

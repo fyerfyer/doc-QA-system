@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/fyerfyer/doc-QA-system/internal/repository"
-	"github.com/fyerfyer/doc-QA-system/internal/vectordb"
 	"path/filepath"
 	"strconv"
 	"time"
+
+	"github.com/fyerfyer/doc-QA-system/internal/database"
+	"github.com/fyerfyer/doc-QA-system/internal/repository"
+	"github.com/fyerfyer/doc-QA-system/internal/vectordb"
 
 	"github.com/fyerfyer/doc-QA-system/pkg/taskqueue"
 	"github.com/sirupsen/logrus"
@@ -48,6 +50,9 @@ func (s *DocumentService) EnableAsyncProcessing(queue taskqueue.Queue) {
 		}
 		s.statusManager = NewDocumentStatusManager(s.repo, s.logger)
 	}
+
+	// 使用已有的仓库和新的队列创建新的仓库
+	s.repo = repository.NewDocumentRepositoryWithQueue(database.DB, queue)
 
 	// 注册任务回调处理器
 	s.registerTaskHandlers()
@@ -363,9 +368,7 @@ func (s *DocumentService) saveVectorsToDatabase(ctx context.Context, documentID 
 
 		// 将float64向量转换为float32向量(如果需要)
 		vectorData := make([]float32, len(vector.Vector))
-		for i, v := range vector.Vector {
-			vectorData[i] = v
-		}
+		copy(vectorData, vector.Vector)
 
 		// 构建向量数据库文档对象
 		vectorDoc := vectordb.Document{

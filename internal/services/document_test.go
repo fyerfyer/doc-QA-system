@@ -3,6 +3,13 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"io/ioutil"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
 	"github.com/fyerfyer/doc-QA-system/internal/database"
 	"github.com/fyerfyer/doc-QA-system/internal/models"
 	"github.com/fyerfyer/doc-QA-system/internal/repository"
@@ -10,12 +17,6 @@ import (
 	"github.com/sirupsen/logrus"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
-	"io"
-	"io/ioutil"
-	"os"
-	"path/filepath"
-	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -25,34 +26,28 @@ import (
 	"github.com/fyerfyer/doc-QA-system/pkg/storage"
 )
 
-// Update setupDocumentTestEnv to initialize DB and return statusManager
+// setupDocumentTestEnv 设置文档服务的测试环境
 func setupDocumentTestEnv(t *testing.T, tempDir string) (*DocumentService, vectordb.Repository, *DocumentStatusManager) {
-	// Setup database first
 	_, cleanup := setupTestDB(t)
-	t.Cleanup(cleanup) // Ensure DB is cleaned up after test
+	t.Cleanup(cleanup)
 
-	// Create repository and status manager
 	repo := repository.NewDocumentRepository()
 	logger := logrus.New()
 	logger.SetLevel(logrus.DebugLevel)
 	statusManager := NewDocumentStatusManager(repo, logger)
 
-	// Create storage service
 	storageConfig := storage.LocalConfig{
 		Path: tempDir,
 	}
 	storageService, err := storage.NewLocalStorage(storageConfig)
 	require.NoError(t, err)
 
-	// Create text splitter
 	splitterConfig := document.DefaultSplitterConfig()
-	splitterConfig.ChunkSize = 100 // Small chunks for testing
+	splitterConfig.ChunkSize = 100
 	textSplitter := document.NewTextSplitter(splitterConfig)
 
-	// Create embedding client
 	embeddingClient := &testEmbeddingClient{dimension: 4}
 
-	// Create vector database
 	vectorDBConfig := vectordb.Config{
 		Type:      "memory",
 		Dimension: 4,
@@ -60,7 +55,6 @@ func setupDocumentTestEnv(t *testing.T, tempDir string) (*DocumentService, vecto
 	vectorDB, err := vectordb.NewRepository(vectorDBConfig)
 	require.NoError(t, err)
 
-	// Create document service with status manager
 	docService := NewDocumentService(
 		storageService,
 		&testParser{},
@@ -111,7 +105,6 @@ func setupTestDB(t *testing.T) (*gorm.DB, func()) {
 
 // TestDocumentService 测试文档服务的基本功能
 func TestDocumentService(t *testing.T) {
-	// Create temp directory and file
 	tempDir, err := ioutil.TempDir("", "docqa-test-*")
 	require.NoError(t, err)
 	defer os.RemoveAll(tempDir)
@@ -121,25 +114,20 @@ func TestDocumentService(t *testing.T) {
 	err = ioutil.WriteFile(testFile, []byte(testContent), 0644)
 	require.NoError(t, err)
 
-	// Initialize test environment and services
 	docService, vectorDB, statusManager := setupDocumentTestEnv(t, tempDir)
 
-	// Create a document record in the database first!
 	ctx := context.Background()
 	fileID := "test-file-id"
 	fileName := filepath.Base(testFile)
 	fileInfo, err := os.Stat(testFile)
 	require.NoError(t, err)
 
-	// Mark document as uploaded before processing
 	err = statusManager.MarkAsUploaded(ctx, fileID, fileName, testFile, fileInfo.Size())
 	require.NoError(t, err, "Failed to create initial document record")
 
-	// Now process the document
 	err = docService.ProcessDocument(ctx, fileID, testFile)
 	require.NoError(t, err, "Document processing should succeed")
 
-	// Rest of your test remains the same...
 	filter := vectordb.SearchFilter{
 		FileIDs:    []string{fileID},
 		MaxResults: 10,
@@ -632,7 +620,19 @@ func TestAsyncDocumentProcessing(t *testing.T) {
 		require.NoError(t, err)
 		require.NotEmpty(t, tasks)
 
-		taskID := tasks[0].ID
+		// 找到最新的任务（因为redis里面可能有未处理的任务积累）
+		var latestTask *taskqueue.Task
+		for _, task := range tasks {
+			if task.Type == taskqueue.TaskProcessComplete {
+				if latestTask == nil || task.CreatedAt.After(latestTask.CreatedAt) {
+					latestTask = task
+				}
+			}
+		}
+		require.NotNil(t, latestTask, "应该找到最新的处理任务")
+
+		// 使用最新任务的ID更新状态
+		taskID := latestTask.ID
 		err = queue.UpdateTaskStatus(ctx, taskID, taskqueue.StatusCompleted, json.RawMessage(`{}`), "")
 		require.NoError(t, err)
 

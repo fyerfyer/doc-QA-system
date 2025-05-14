@@ -160,30 +160,27 @@ func (m *DocumentStatusManager) MarkAsFailed(ctx context.Context, docID string, 
 
 // UpdateProgress 更新文档处理进度
 func (m *DocumentStatusManager) UpdateProgress(ctx context.Context, docID string, progress int) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	// 确保进度在0-100范围内
+	if progress < 0 {
+		progress = 0
+	}
+	if progress > 100 {
+		progress = 100
+	}
 
-	// 获取当前文档
+	// 获取文档状态
 	doc, err := m.repo.GetByID(docID)
 	if err != nil {
 		return fmt.Errorf("failed to get document: %w", err)
 	}
 
-	// 只有处理中的文档才能更新进度
+	// 只有处理中的文档可以更新进度
 	if doc.Status != models.DocStatusProcessing {
-		return fmt.Errorf("cannot update progress: document %s is not in processing state", docID)
+		return fmt.Errorf("cannot update progress for document with status: %s", doc.Status)
 	}
 
-	m.logger.WithFields(logrus.Fields{
-		"doc_id":   docID,
-		"progress": progress,
-	}).Debug("Updating document progress")
-
 	// 更新进度
-	doc.Progress = progress
-	doc.UpdatedAt = time.Now()
-
-	return m.repo.Update(doc)
+	return m.repo.UpdateProgress(docID, progress)
 }
 
 // UpdateStage 更新文档处理阶段
