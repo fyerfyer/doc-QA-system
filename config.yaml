@@ -1,0 +1,38 @@
+server:
+  host: 0.0.0.0
+  port: 8080
+
+storage:
+  type: local
+  path: /app/data/uploads
+
+vectordb:
+  type: faiss
+  path: /app/data/vectordb
+  dim: 1536
+  distance: cosine
+
+database:
+  type: sqlite
+  dsn: /app/data/docqa.db
+
+cache:
+  enable: true
+  type: redis
+  address: redis:6379
+  ttl: 3600
+
+queue:
+  enable: true
+  type: redis
+  redis_addr: redis:6379
+  concurrency: 10
+
+document:
+  chunk_size: 1000
+  chunk_overlap: 200
+
+embed:
+  provider: "tongyi"
+  model: "text-embedding-v3"
+  api_key: "${DASHSCOPE_API_KEY}"
