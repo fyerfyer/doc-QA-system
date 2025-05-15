@@ -1,9 +1,12 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"time"
@@ -96,26 +99,59 @@ func (s *DocumentService) processDocumentAsync(ctx context.Context, fileID strin
 		fileType = fileType[1:] // 去掉开头的点号
 	}
 
-	payload := taskqueue.ProcessCompletePayload{
-		DocumentID: fileID,
-		FilePath:   filePath,
-		FileName:   fileName,
-		FileType:   fileType,
-		ChunkSize:  options.ChunkSize,
-		Overlap:    options.ChunkOverlap,
-		SplitType:  options.SplitType,
-		Model:      options.Model,
-		Metadata:   options.Metadata,
+	// 修改为HTTP调用Python API
+	pythonServiceURL := os.Getenv("PYTHONSERVICE_URL")
+	if pythonServiceURL == "" {
+		pythonServiceURL = "http://py-api:8000"
 	}
 
-	// 创建任务
-	taskID, err := s.taskQueue.Enqueue(ctx, taskqueue.TaskProcessComplete, fileID, payload)
-	if err != nil {
-		s.logger.WithError(err).Error("Failed to enqueue document processing task")
-		// 标记文档为失败状态
-		_ = s.statusManager.MarkAsFailed(ctx, fileID, fmt.Sprintf("Failed to enqueue task: %v", err))
-		return fmt.Errorf("failed to enqueue document processing task: %w", err)
+	// 准备API请求参数
+	requestBody := map[string]interface{}{
+		"document_id": fileID,
+		"file_path":   filePath,
+		"file_name":   fileName,
+		"file_type":   fileType,
+		"chunk_size":  options.ChunkSize,
+		"overlap":     options.ChunkOverlap,
+		"split_type":  options.SplitType,
+		"model":       options.Model,
+		"metadata":    options.Metadata,
 	}
+
+	jsonBody, err := json.Marshal(requestBody)
+	if err != nil {
+		s.logger.WithError(err).Error("Failed to marshal document processing request")
+		return fmt.Errorf("failed to marshal document processing request: %w", err)
+	}
+
+	// 发送HTTP请求到Python服务
+	req, err := http.NewRequestWithContext(ctx, "POST", pythonServiceURL+"/api/tasks/process", bytes.NewBuffer(jsonBody))
+	if err != nil {
+		s.logger.WithError(err).Error("Failed to create document processing request")
+		return fmt.Errorf("failed to create document processing request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		s.logger.WithError(err).Error("Failed to send document processing request")
+		return fmt.Errorf("failed to send document processing request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// 处理响应
+	var respBody struct {
+		TaskID string `json:"task_id"`
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&respBody); err != nil {
+		s.logger.WithError(err).Error("Failed to decode document processing response")
+		return fmt.Errorf("failed to decode document processing response: %w", err)
+	}
+
+	// 使用响应中的任务ID
+	taskID := respBody.TaskID
 
 	s.logger.WithFields(logrus.Fields{
 		"file_id": fileID,

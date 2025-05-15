@@ -1,5 +1,6 @@
 import json
 import os
+import importlib
 from celery import Celery, signals
 from celery.schedules import crontab
 from datetime import datetime, timedelta
@@ -23,6 +24,8 @@ task_queues = {
 
 # Celery配置
 app = Celery("docqa_worker")
+
+# 添加任务导入配置，确保任务被自动加载
 app.conf.update(
     # 基本配置
     broker_url=REDIS_URL,
@@ -45,6 +48,9 @@ app.conf.update(
         "app.worker.tasks.vectorize_text": {"queue": "default"},
     },
 
+    # 添加imports配置确保任务模块被自动加载
+    imports=["app.worker.tasks"],
+
     # 任务执行配置
     task_acks_late=True,           # 任务完成后才确认
     worker_prefetch_multiplier=1,  # 防止一次获取太多任务
@@ -57,7 +63,17 @@ app.conf.update(
     # 并发和池配置
     worker_concurrency=os.cpu_count(),  # 工作进程数量
     worker_max_tasks_per_child=1000,   # 工作进程处理的最大任务数
+
+    # 添加broker_connection_retry_on_startup配置，解决警告
+    broker_connection_retry_on_startup=True,
 )
+
+# 手动导入任务模块确保任务被注册
+try:
+    importlib.import_module("app.worker.tasks")
+    logger.info("Successfully imported tasks module")
+except ImportError as e:
+    logger.error(f"Error importing tasks module: {e}")
 
 
 # 任务前置处理
@@ -153,24 +169,34 @@ def cleanup_expired_tasks():
                     task_dict = json.loads(task_data)
                     if 'created_at' in task_dict:
                         created_at_str = task_dict['created_at']
-                        # 处理ISO格式时间字符串
-                        if 'Z' in created_at_str:
-                            created_at_str = created_at_str.replace('Z', '+00:00')
-                        created_at = datetime.fromisoformat(created_at_str)
+                        try: 
+                            # 处理ISO格式时间字符串
+                            if 'Z' in created_at_str:
+                                created_at_str = created_at_str.replace('Z', '+00:00')
+                            created_at = datetime.fromisoformat(created_at_str)
+                            
+                            # 确保两个时间对象都是aware或naive
+                            if created_at.tzinfo is not None and cutoff_time.tzinfo is None:
+                                cutoff_time = cutoff_time.replace(tzinfo=created_at.tzinfo)
+                            elif created_at.tzinfo is None and cutoff_time.tzinfo is not None:
+                                created_at = created_at.replace(tzinfo=cutoff_time.tzinfo)
 
-                        # 任务已过期
-                        if created_at < cutoff_time:
-                            # 获取文档ID
-                            document_id = task_dict.get('document_id')
+                            # 任务已过期
+                            if created_at < cutoff_time:
+                                # 获取文档ID
+                                document_id = task_dict.get('document_id')
 
-                            # 从文档任务集合中移除
-                            if document_id:
-                                doc_key = f"{document_tasks_prefix}{document_id}"
-                                redis_client.srem(doc_key, task_id)
+                                # 从文档任务集合中移除
+                                if document_id:
+                                    doc_key = f"{document_tasks_prefix}{document_id}"
+                                    redis_client.srem(doc_key, task_id)
 
-                            # 删除任务数据
-                            redis_client.delete(key_str)
-                            deleted_count += 1
+                                # 删除任务数据
+                                redis_client.delete(key_str)
+                                deleted_count += 1
+                        except Exception as e:
+                            logger.error(f"Error processing time for task {task_id}: {str(e)}")
+
                 except Exception as e:
                     logger.error(f"Error processing task key {key}: {str(e)}")
 
