@@ -17,6 +17,9 @@ EMBEDDER_REGISTRY = {
     "text-embedding-v2": TongyiEmbedder,
     "text-embedding-v3": TongyiEmbedder,
     "dashscope": TongyiEmbedder,
+    
+    # 添加默认入口
+    "default": TongyiEmbedder,
 
     # HuggingFace模型
     "huggingface": HuggingFaceEmbedder,
@@ -40,6 +43,11 @@ def create_embedder(embedder_type: str = "tongyi", **kwargs) -> BaseEmbedder:
     异常:
         ValueError: 如果嵌入模型类型不受支持
     """
+    # 处理 "default" 特殊情况
+    if embedder_type and embedder_type.lower() == "default":
+        logger.info("Using default embedder as specified by 'default' model name")
+        return get_default_embedder(**kwargs)
+        
     # 默认使用通义千问
     if not embedder_type:
         embedder_type = "tongyi"

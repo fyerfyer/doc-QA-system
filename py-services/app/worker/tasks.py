@@ -470,7 +470,15 @@ def process_document(task_id: str) -> bool:
             from app.embedders.factory import create_embedder
 
             # 创建嵌入模型
-            embedder = create_embedder(payload.model)
+            try:
+                embedder = create_embedder(payload.model)
+                logger.info(f"Successfully created embedder of type '{payload.model}'")
+            except ValueError as e:
+                # 如果特定模型无法使用的话，改为使用默认模型
+                logger.warning(f"Could not create embedder with model '{payload.model}': {str(e)}")
+                logger.warning(f"Falling back to default embedder")
+                from app.embedders.factory import get_default_embedder
+                embedder = get_default_embedder()
 
             # 提取文本并向量化
             texts = [chunk.text for chunk in chunks]

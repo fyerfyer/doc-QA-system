@@ -304,6 +304,13 @@ class DocumentProcessor:
             chunks = payload.get('chunks', [])
             model = payload.get('model', self.embedding_model)
 
+            # 显式处理default模型
+            if model.lower() == "default":
+                logger.info("Using default embedder as specified by 'default' model name")
+                embedder = get_default_embedder()
+            else:
+                embedder = create_embedder(model)
+
             if not chunks:
                 raise ValueError("Empty chunks list in payload")
 
@@ -319,7 +326,7 @@ class DocumentProcessor:
 
             # 批量生成向量
             start_time = time.time()
-            vectors = self.embedder.embed_batch(texts)
+            vectors = embedder.embed_batch(texts)
 
             # 构建向量信息
             vector_infos = []

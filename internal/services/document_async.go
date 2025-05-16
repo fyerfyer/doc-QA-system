@@ -59,8 +59,8 @@ func (s *DocumentService) EnableAsyncProcessing(queue taskqueue.Queue) {
 	// 使用已有的仓库和新的队列创建新的仓库
 	s.repo = repository.NewDocumentRepositoryWithQueue(database.DB, queue)
 
-	// 注册任务回调处理器
-	s.registerTaskHandlers()
+	// 注册自定义任务回调处理器，替代默认处理器
+	s.registerCustomizedTaskHandlers()
 
 	s.logger.Info("Async document processing enabled")
 }
@@ -267,6 +267,66 @@ func (s *DocumentService) registerTaskHandlers() {
 	s.logger.Info("Registered task handlers")
 }
 
+// registerCustomizedTaskHandlers registers task handlers with access to the document service
+func (s *DocumentService) registerCustomizedTaskHandlers() {
+	if s.taskQueue == nil {
+		s.logger.Warn("Task queue not available, cannot register handlers")
+		return
+	}
+
+	// Create the callback processor
+	processor := taskqueue.NewCallbackProcessor(s.taskQueue, s.logger)
+
+	// Register our customized process_complete handler
+	processor.RegisterHandler(taskqueue.TaskProcessComplete, func(ctx context.Context, task *taskqueue.Task, result json.RawMessage) error {
+		var completeResult taskqueue.ProcessCompleteResult
+		if err := json.Unmarshal(result, &completeResult); err != nil {
+			s.logger.WithError(err).Error("Failed to unmarshal process complete result")
+			return fmt.Errorf("failed to unmarshal process complete result: %w", err)
+		}
+
+		s.logger.WithFields(logrus.Fields{
+			"task_id":       task.ID,
+			"document_id":   task.DocumentID,
+			"chunk_count":   completeResult.ChunkCount,
+			"vector_count":  completeResult.VectorCount,
+			"parse_status":  completeResult.ParseStatus,
+			"chunk_status":  completeResult.ChunkStatus,
+			"vector_status": completeResult.VectorStatus,
+		}).Info("Document processing completed")
+
+		// Handle explicit errors
+		if completeResult.Error != "" {
+			s.logger.WithField("error", completeResult.Error).Error("Document processing failed with error")
+			if err := s.statusManager.MarkAsFailed(ctx, task.DocumentID, completeResult.Error); err != nil {
+				s.logger.WithError(err).Error("Failed to mark document as failed")
+			}
+			return fmt.Errorf("document processing failed: %s", completeResult.Error)
+		}
+
+		// If parse and chunk are successful, mark document as completed even if vectorize failed
+		if completeResult.ParseStatus == "completed" && completeResult.ChunkStatus == "completed" {
+			s.logger.WithField("document_id", task.DocumentID).Info("Marking document as completed based on completed parsing and chunking")
+			if err := s.statusManager.MarkAsCompleted(ctx, task.DocumentID, completeResult.ChunkCount); err != nil {
+				s.logger.WithError(err).Error("Failed to mark document as completed")
+				return err
+			}
+			
+			// Log warning if vectorization failed
+			if completeResult.VectorStatus == "failed" {
+				s.logger.WithField("document_id", task.DocumentID).Warn(
+					"Document marked as completed but vectorization failed. Search functionality may be limited.")
+			}
+		}
+
+		return nil
+	})
+
+	// Register other handlers as needed
+
+	s.logger.Info("Registered customized task handlers")
+}
+
 // handleDocumentParseResult 处理文档解析任务结果
 func (s *DocumentService) handleDocumentParseResult(ctx context.Context, task *taskqueue.Task, result json.RawMessage) error {
 	s.logger.WithFields(logrus.Fields{
@@ -386,15 +446,25 @@ func (s *DocumentService) handleProcessCompleteResult(ctx context.Context, task 
 		}
 
 		if err := s.saveVectorsToDatabase(ctx, task.DocumentID, &vectorResult); err != nil {
-			s.logger.WithError(err).Error("Failed to save vectors from complete result")
-			return err
+			s.logger.WithError(err).Error("Failed to save vectors to database")
+			// Continue processing, don't fail the whole operation
 		}
 	}
 
-	// 标记文档为已完成状态
-	if err := s.statusManager.MarkAsCompleted(ctx, task.DocumentID, completeResult.ChunkCount); err != nil {
-		s.logger.WithError(err).Error("Failed to mark document as completed")
-		return err
+	// Check if parse and chunk steps succeeded, mark document as completed
+	// even if vectorization failed
+	if completeResult.ParseStatus == "completed" && completeResult.ChunkStatus == "completed" {
+		// 标记文档为已完成状态
+		if err := s.statusManager.MarkAsCompleted(ctx, task.DocumentID, completeResult.ChunkCount); err != nil {
+			s.logger.WithError(err).Error("Failed to mark document as completed")
+			return err
+		}
+		
+		// Log warning if vectorization failed
+		if completeResult.VectorStatus == "failed" {
+			s.logger.WithField("document_id", task.DocumentID).Warn(
+				"Document marked as completed but vectorization failed. Search functionality may be limited.")
+		}
 	}
 
 	s.logger.WithFields(logrus.Fields{
