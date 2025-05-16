@@ -29,7 +29,6 @@ async def handle_callback(request: Request) -> Dict[str, Any]:
         task_type = body.get('type')
         result = body.get('result')
         error = body.get('error', '')
-        timestamp = body.get('timestamp', datetime.now().isoformat())
 
         logger.info(f"Received callback for task {task_id}, document {document_id}, status: {status}")
 
@@ -40,7 +39,7 @@ async def handle_callback(request: Request) -> Dict[str, Any]:
                 "success": False,
                 "message": "Missing required fields: task_id, document_id, status or type",
                 "task_id": task_id or "unknown",
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
             }
 
         # 从Redis获取任务信息
@@ -51,7 +50,7 @@ async def handle_callback(request: Request) -> Dict[str, Any]:
                 "success": False,
                 "message": f"Task {task_id} not found",
                 "task_id": task_id,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
             }
 
         # 解析状态和任务类型
@@ -64,7 +63,7 @@ async def handle_callback(request: Request) -> Dict[str, Any]:
                 "success": False,
                 "message": f"Invalid task status or type: {str(e)}",
                 "task_id": task_id,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
             }
 
         # 更新任务状态
@@ -74,7 +73,7 @@ async def handle_callback(request: Request) -> Dict[str, Any]:
                 "success": False,
                 "message": "Failed to update task status",
                 "task_id": task_id,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
             }
 
         # 如果任务失败，记录详细日志
@@ -89,7 +88,7 @@ async def handle_callback(request: Request) -> Dict[str, Any]:
             "success": True,
             "message": "Callback processed successfully",
             "task_id": task_id,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
         }
 
     except json.JSONDecodeError:
@@ -98,7 +97,7 @@ async def handle_callback(request: Request) -> Dict[str, Any]:
             "success": False,
             "message": "Invalid JSON in request body",
             "task_id": "unknown",
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
         }
     except Exception as e:
         logger.error(f"Error processing callback: {str(e)}")
@@ -106,7 +105,7 @@ async def handle_callback(request: Request) -> Dict[str, Any]:
             "success": False,
             "message": f"Error processing callback: {str(e)}",
             "task_id": body.get('task_id', 'unknown') if 'body' in locals() else 'unknown',
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
         }
 
 
@@ -125,7 +124,7 @@ async def get_task_status(task_id: str) -> Dict[str, Any]:
                 "success": False,
                 "message": f"Task {task_id} not found",
                 "task_id": task_id,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
             }
 
         # 返回任务状态
@@ -137,7 +136,7 @@ async def get_task_status(task_id: str) -> Dict[str, Any]:
             "created_at": task.created_at.isoformat() if task.created_at else None,
             "updated_at": task.updated_at.isoformat() if task.updated_at else None,
             "error": task.error or None,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
         }
 
     except Exception as e:
@@ -146,7 +145,7 @@ async def get_task_status(task_id: str) -> Dict[str, Any]:
             "success": False,
             "message": f"Error getting task status: {str(e)}",
             "task_id": task_id,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
         }
 
 
@@ -179,7 +178,7 @@ async def get_document_tasks(document_id: str) -> Dict[str, Any]:
             "success": True,
             "document_id": document_id,
             "tasks": tasks,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
         }
 
     except Exception as e:
@@ -188,5 +187,5 @@ async def get_document_tasks(document_id: str) -> Dict[str, Any]:
             "success": False,
             "message": f"Error getting document tasks: {str(e)}",
             "document_id": document_id,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
         }

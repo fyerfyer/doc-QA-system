@@ -1,7 +1,6 @@
-import datetime
-import os
+from datetime import datetime
 import time
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from pathlib import Path
 import requests
 from functools import wraps
@@ -145,11 +144,27 @@ def format_task_info(task: Any) -> Dict[str, Any]:
 def send_callback(url, data):
     """Send a callback to the specified URL with the provided data."""
     try:
-        # Fix the timestamp handling - the issue is here
+        # Fix the timestamp handling - ensure it has timezone information
         if "timestamp" in data:
-            # Don't check instance type, just ensure it's a string
-            if not isinstance(data["timestamp"], str):
-                data["timestamp"] = str(data["timestamp"])
+            if isinstance(data["timestamp"], str):
+                # If it's already a string but missing timezone
+                if "Z" not in data["timestamp"] and "+" not in data["timestamp"] and "-" not in data["timestamp"][-6:]:
+                    # If it's an ISO format timestamp
+                    if "T" in data["timestamp"]:
+                        # Remove microseconds if present (handle cases like 2025-05-16T02:00:47.888351)
+                        timestamp_parts = data["timestamp"].split(".")
+                        base_timestamp = timestamp_parts[0]
+                        # Add Z to indicate UTC timezone
+                        data["timestamp"] = base_timestamp + "Z"
+                    else:
+                        # If not ISO format, convert using standard UTC format
+                        data["timestamp"] = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+            elif isinstance(data["timestamp"], datetime.datetime):
+                # Convert datetime to string with timezone
+                data["timestamp"] = data["timestamp"].strftime("%Y-%m-%dT%H:%M:%SZ")
+            else:
+                # For any other type, convert to string with Z timezone
+                data["timestamp"] = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
         
         # Ensure status is a string
         if "status" in data and not isinstance(data["status"], str):
@@ -168,7 +183,7 @@ def send_callback(url, data):
             
         return True
     except Exception as e:
-        logger.error(f"Exception sending callback to {url}: {str(e)}")
+        logger.error(f"Failed to send callback to {url}: {str(e)}")
         return False
 
 

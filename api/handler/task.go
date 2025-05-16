@@ -22,9 +22,14 @@ type TaskHandler struct {
 // NewTaskHandler 创建新的任务处理器
 func NewTaskHandler(queue taskqueue.Queue) *TaskHandler {
 	logger := middleware.GetLogger()
+	processor := taskqueue.NewCallbackProcessor(queue, logger)
+	
+	// Register default handlers with this processor instance
+	processor.RegisterDefaultHandlers(queue)
+	
 	return &TaskHandler{
 		queue:     queue,
-		processor: taskqueue.NewCallbackProcessor(queue, logger),
+		processor: processor,
 		logger:    logger,
 	}
 }
@@ -57,6 +62,16 @@ func (h *TaskHandler) HandleCallback(c *gin.Context) {
 		"document_id": req.DocumentID,
 		"status":      req.Status,
 	}).Info("Received task callback")
+
+	// Debug: Check for registered handlers
+	registeredHandlers := h.processor.GetRegisteredHandlerTypes()
+	taskType := taskqueue.TaskType(req.Type)
+	if _, exists := registeredHandlers[taskType]; !exists {
+		h.logger.WithFields(logrus.Fields{
+			"task_type": req.Type,
+			"registered_handlers": registeredHandlers,
+		}).Warn("Handler not registered for this task type")
+	}
 
 	// 使用处理器处理回调
 	resp, err := h.processor.HandleCallback(c.Request.Context(), &req)

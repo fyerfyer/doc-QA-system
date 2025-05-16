@@ -2,6 +2,7 @@ import os
 import logging
 from typing import BinaryIO, Dict, Any
 import chardet
+import io
 
 from app.parsers.base import BaseParser
 
@@ -37,20 +38,41 @@ class TextParser(BaseParser):
         self.validate_file(file_path)
 
         try:
-            # 检测文件编码
-            encoding = self._detect_encoding(file_path)
+            # 获取文件内容（支持MinIO和本地文件系统）
+            file_content = self.get_file_content(file_path)
 
-            # 打开文本文件并读取内容
-            with open(file_path, 'r', encoding=encoding, errors='replace') as file:
-                return self.parse_reader(file, os.path.basename(file_path))
+            try:
+                # 读取文件内容
+                content = file_content.read()
+
+                # 检测编码
+                if isinstance(content, bytes):
+                    encoding = chardet.detect(content)['encoding'] or 'utf-8'
+                    content = content.decode(encoding, errors='replace')
+
+                # 处理内容
+                return self.parse_reader(io.StringIO(content), os.path.basename(file_path))
+            finally:
+                # 确保关闭文件
+                if hasattr(file_content, 'close'):
+                    file_content.close()
+                if hasattr(file_content, 'release_conn'):
+                    file_content.release_conn()
         except UnicodeDecodeError as e:
-            self.logger.error(f"Failed to decode text file {file_path} with detected encoding: {str(e)}")
+            self.logger.error(f"Failed to decode text file {file_path}: {str(e)}")
             # 尝试使用不同的编码
             try:
-                with open(file_path, 'r', encoding='utf-8-sig', errors='replace') as file:
-                    return self.parse_reader(file, os.path.basename(file_path))
+                # 重新获取文件内容
+                file_content = self.get_file_content(file_path)
+                content = file_content.read()
+                if isinstance(content, bytes):
+                    content = content.decode('utf-8-sig', errors='replace')
+                return self.parse_reader(io.StringIO(content), os.path.basename(file_path))
             except Exception as e2:
                 raise ValueError(f"Could not decode file with any supported encoding: {str(e2)}")
+            finally:
+                if 'file_content' in locals() and hasattr(file_content, 'close'):
+                    file_content.close()
         except Exception as e:
             self.logger.error(f"Error parsing text file {file_path}: {str(e)}")
             raise ValueError(f"Text file parsing error: {str(e)}")
@@ -107,8 +129,19 @@ class TextParser(BaseParser):
 
         # 尝试获取文本文件的行数和字符数
         try:
-            with open(file_path, 'r', encoding=self._detect_encoding(file_path), errors='replace') as file:
-                content = file.read()
+            # 获取文件内容
+            file_content = self.get_file_content(file_path)
+
+            try:
+                # 读取文件内容
+                content_bytes = file_content.read()
+
+                if isinstance(content_bytes, bytes):
+                    encoding = chardet.detect(content_bytes)['encoding'] or 'utf-8'
+                    content = content_bytes.decode(encoding, errors='replace')
+                else:
+                    content = content_bytes
+
                 lines = content.count('\n') + 1
                 chars = len(content)
 
@@ -118,6 +151,12 @@ class TextParser(BaseParser):
                     "char_count": chars,
                     "word_count": len(content.split())
                 })
+            finally:
+                # 确保关闭文件
+                if hasattr(file_content, 'close'):
+                    file_content.close()
+                if hasattr(file_content, 'release_conn'):
+                    file_content.release_conn()
 
         except Exception as e:
             self.logger.warning(f"Failed to extract detailed text metadata from {file_path}: {str(e)}")
@@ -143,34 +182,3 @@ class TextParser(BaseParser):
             'py', 'go', 'java', 'c', 'cpp', 'cs', 'rs',  # 代码格式
             'sh', 'bat', 'ps1',  # 脚本格式
         ]
-
-    def _detect_encoding(self, file_path: str) -> str:
-        """
-        检测文本文件的编码
-
-        Args:
-            file_path: 文件路径
-
-        Returns:
-            str: 检测到的编码名称，如果无法检测则返回utf-8
-        """
-        try:
-            # 读取文件前几千字节来检测编码
-            with open(file_path, 'rb') as f:
-                raw_data = f.read(min(4096, os.path.getsize(file_path)))
-
-            result = chardet.detect(raw_data)
-            encoding = result['encoding']
-            confidence = result['confidence']
-
-            self.logger.debug(f"Detected encoding for {file_path}: {encoding} (confidence: {confidence:.2f})")
-
-            # 如果编码不可靠或未检测到，使用UTF-8
-            if not encoding or confidence < 0.7:
-                return 'utf-8'
-
-            return encoding
-
-        except Exception as e:
-            self.logger.warning(f"Error detecting encoding for {file_path}: {str(e)}. Falling back to UTF-8.")
-            return 'utf-8'

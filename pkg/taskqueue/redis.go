@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -170,11 +171,59 @@ func (q *RedisQueue) GetTask(ctx context.Context, taskID string) (*Task, error) 
 		if errors.Is(err, redis.Nil) {
 			return nil, ErrTaskNotFound
 		}
-		return nil, fmt.Errorf("failed to get task from redis: %w", err)
+		return nil, err
+	}
+
+	// 处理无效或空数据
+	if len(data) == 0 {
+		return nil, ErrTaskNotFound
+	}
+
+	// 检查JSON数据中的时间格式并预处理
+	var jsonData map[string]interface{}
+	err = json.Unmarshal(data, &jsonData)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal task data for preprocessing: %w", err)
+	}
+
+	// 处理CreatedAt字段
+	if createdAt, ok := jsonData["created_at"].(string); ok {
+		// 如果时间戳没有时区信息，添加UTC时区
+		if !strings.Contains(createdAt, "Z") && !strings.Contains(createdAt, "+") {
+			jsonData["created_at"] = createdAt + "Z"
+		}
+	}
+
+	// 处理UpdatedAt字段
+	if updatedAt, ok := jsonData["updated_at"].(string); ok {
+		// 如果时间戳没有时区信息，添加UTC时区
+		if !strings.Contains(updatedAt, "Z") && !strings.Contains(updatedAt, "+") {
+			jsonData["updated_at"] = updatedAt + "Z"
+		}
+	}
+
+	// 处理StartedAt字段，如果存在
+	if startedAt, ok := jsonData["started_at"].(string); ok && startedAt != "" {
+		if !strings.Contains(startedAt, "Z") && !strings.Contains(startedAt, "+") {
+			jsonData["started_at"] = startedAt + "Z"
+		}
+	}
+
+	// 处理CompletedAt字段，如果存在
+	if completedAt, ok := jsonData["completed_at"].(string); ok && completedAt != "" {
+		if !strings.Contains(completedAt, "Z") && !strings.Contains(completedAt, "+") {
+			jsonData["completed_at"] = completedAt + "Z"
+		}
+	}
+
+	// 重新序列化预处理后的JSON数据
+	fixedData, err := json.Marshal(jsonData)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal preprocessed task data: %w", err)
 	}
 
 	var task Task
-	if err := json.Unmarshal(data, &task); err != nil {
+	if err := json.Unmarshal(fixedData, &task); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal task data: %w", err)
 	}
 

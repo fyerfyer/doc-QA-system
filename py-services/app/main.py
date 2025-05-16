@@ -68,6 +68,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 初始化MinIO客户端
+from app.utils.minio_client import get_minio_client
+try:
+    minio = get_minio_client()
+    logger.info(f"MinIO connection initialized: {minio.endpoint}, bucket: {minio.bucket}")
+except Exception as e:
+    logger.error(f"Failed to initialize MinIO client: {str(e)}")
+
 # Include the API routers
 app.include_router(health_router)
 app.include_router(callback_router)

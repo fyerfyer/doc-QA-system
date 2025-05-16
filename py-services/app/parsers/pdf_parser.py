@@ -38,9 +38,17 @@ class PDFParser(BaseParser):
         self.validate_file(file_path)
 
         try:
-            # 打开PDF文件
-            with open(file_path, 'rb') as file:
-                return self.parse_reader(file, os.path.basename(file_path))
+            # 获取文件内容（支持MinIO和本地文件系统）
+            file_content = self.get_file_content(file_path)
+
+            try:
+                return self.parse_reader(file_content, os.path.basename(file_path))
+            finally:
+                # 确保关闭文件
+                if hasattr(file_content, 'close'):
+                    file_content.close()
+                if hasattr(file_content, 'release_conn'):
+                    file_content.release_conn()
         except PdfReadError as e:
             self.logger.error(f"Failed to read PDF file {file_path}: {str(e)}")
             raise ValueError(f"Invalid or corrupted PDF file: {str(e)}")
@@ -123,8 +131,11 @@ class PDFParser(BaseParser):
         base_metadata = super().get_metadata(file_path)
 
         try:
-            with open(file_path, 'rb') as file:
-                pdf_reader = pypdf.PdfReader(file)
+            # 获取文件内容
+            file_content = self.get_file_content(file_path)
+
+            try:
+                pdf_reader = pypdf.PdfReader(file_content)
 
                 # 提取PDF特定的元数据
                 pdf_info = pdf_reader.metadata
@@ -152,6 +163,12 @@ class PDFParser(BaseParser):
                     **base_metadata,
                     "page_count": len(pdf_reader.pages)
                 }
+            finally:
+                # 确保关闭文件
+                if hasattr(file_content, 'close'):
+                    file_content.close()
+                if hasattr(file_content, 'release_conn'):
+                    file_content.release_conn()
 
         except Exception as e:
             self.logger.warning(f"Failed to extract PDF metadata from {file_path}: {str(e)}")
@@ -168,19 +185,7 @@ class PDFParser(BaseParser):
         Returns:
             str: 提取的标题
         """
-        # 尝试从PDF元数据中提取标题
-        try:
-            if os.path.exists(filename):
-                with open(filename, 'rb') as file:
-                    pdf_reader = pypdf.PdfReader(file)
-                    if pdf_reader.metadata and '/Title' in pdf_reader.metadata:
-                        title = pdf_reader.metadata['/Title']
-                        if title and isinstance(title, str) and len(title) > 0:
-                            return title
-        except Exception as e:
-            self.logger.warning(f"Failed to extract title from PDF metadata: {str(e)}")
-
-        # 如果从元数据中无法提取标题，使用基类的方法
+        # 使用基类的方法
         return super().extract_title(text, filename)
 
     def supports_extension(self, extension: str) -> bool:

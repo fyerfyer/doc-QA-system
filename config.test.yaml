@@ -4,13 +4,11 @@ server:
 
 storage:
   type: minio
-  minio:
-    endpoint: localhost:9000
-    access_key: minioadmin
-    secret_key: minioadmin
-    use_ssl: false
-    bucket: docqa
-    region: us-east-1
+  endpoint: localhost:9000
+  access_key: minioadmin
+  secret_key: minioadmin
+  use_ssl: false
+  bucket: docqa
 
 vectordb:
   type: faiss

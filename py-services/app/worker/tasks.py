@@ -127,7 +127,7 @@ def update_task_status(task: Task, status: TaskStatus, result: Any = None, error
                 "type": task.type,
                 "result": task.result,
                 "error": task.error,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
             }
             send_callback(CALLBACK_URL, callback_data)
         except Exception as e:

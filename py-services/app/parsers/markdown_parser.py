@@ -1,6 +1,7 @@
 import logging
 import os
 from typing import BinaryIO
+import io
 
 import markdown
 from bs4 import BeautifulSoup
@@ -45,22 +46,37 @@ class MarkdownParser(BaseParser):
         self.validate_file(file_path)
 
         try:
-            # 打开并读取Markdown文件
-            with open(file_path, 'r', encoding='utf-8') as file:
-                return self.parse_reader(file, os.path.basename(file_path))
-        except UnicodeDecodeError:
-            # 如果UTF-8解码失败，尝试其他编码
-            self.logger.warning(f"UTF-8 decoding failed for {file_path}, trying with other encodings")
-            encodings = ['latin-1', 'cp1252', 'iso-8859-1']
-            for encoding in encodings:
-                try:
-                    with open(file_path, 'r', encoding=encoding) as file:
-                        return self.parse_reader(file, os.path.basename(file_path))
-                except UnicodeDecodeError:
-                    continue
+            # 获取文件内容（支持MinIO和本地文件系统）
+            file_content = self.get_file_content(file_path)
 
-            self.logger.error(f"Failed to decode file {file_path} with all attempted encodings")
-            raise ValueError(f"Could not decode file with any supported encoding")
+            try:
+                # 读取文件内容
+                content_bytes = file_content.read()
+
+                if isinstance(content_bytes, bytes):
+                    try:
+                        content = content_bytes.decode('utf-8')
+                    except UnicodeDecodeError:
+                        # 如果UTF-8解码失败，尝试其他编码
+                        encodings = ['latin-1', 'cp1252', 'iso-8859-1']
+                        for encoding in encodings:
+                            try:
+                                content = content_bytes.decode(encoding)
+                                break
+                            except UnicodeDecodeError:
+                                continue
+                        else:
+                            raise ValueError("Could not decode file with any supported encoding")
+                else:
+                    content = content_bytes
+
+                return self.parse_reader(io.StringIO(content), os.path.basename(file_path))
+            finally:
+                # 确保关闭文件
+                if hasattr(file_content, 'close'):
+                    file_content.close()
+                if hasattr(file_content, 'release_conn'):
+                    file_content.release_conn()
         except Exception as e:
             self.logger.error(f"Error parsing Markdown file {file_path}: {str(e)}")
             raise ValueError(f"Markdown parsing error: {str(e)}")
@@ -171,29 +187,43 @@ class MarkdownParser(BaseParser):
         base_metadata = super().get_metadata(file_path)
 
         try:
-            with open(file_path, 'r', encoding='utf-8') as file:
-                content = file.read(4096)  # 只读取前面一部分内容来寻找元数据
+            # 获取文件内容
+            file_content = self.get_file_content(file_path)
 
-            # 尝试提取YAML前置元数据（如果存在）
-            # YAML前置元数据通常位于文件开头，由三个连字符 --- 包围
-            yaml_metadata = {}
-            if content.startswith('---'):
-                end_pos = content.find('---', 3)
-                if end_pos > 0:
-                    # 这里仅检测存在性，不做完整解析
-                    # 实际使用时可以添加YAML解析
-                    yaml_metadata = {"has_frontmatter": True}
+            try:
+                # 读取文件前4096字节
+                content_bytes = file_content.read(4096)
 
-            # 合并元数据
-            metadata = {**base_metadata, **yaml_metadata}
+                if isinstance(content_bytes, bytes):
+                    content = content_bytes.decode('utf-8', errors='replace')
+                else:
+                    content = content_bytes
 
-            # 尝试提取标题
-            title = self.extract_title(content, os.path.basename(file_path))
-            if title:
-                metadata["title"] = title
+                # 尝试提取YAML前置元数据（如果存在）
+                # YAML前置元数据通常位于文件开头，由三个连字符 --- 包围
+                yaml_metadata = {}
+                if content.startswith('---'):
+                    end_pos = content.find('---', 3)
+                    if end_pos > 0:
+                        # 这里仅检测存在性，不做完整解析
+                        # 实际使用时可以添加YAML解析
+                        yaml_metadata = {"has_frontmatter": True}
 
-            return metadata
+                # 合并元数据
+                metadata = {**base_metadata, **yaml_metadata}
 
+                # 尝试提取标题
+                title = self.extract_title(content, os.path.basename(file_path))
+                if title:
+                    metadata["title"] = title
+
+                return metadata
+            finally:
+                # 确保关闭文件
+                if hasattr(file_content, 'close'):
+                    file_content.close()
+                if hasattr(file_content, 'release_conn'):
+                    file_content.release_conn()
         except Exception as e:
             self.logger.warning(f"Failed to extract Markdown metadata from {file_path}: {str(e)}")
             return base_metadata

@@ -3,8 +3,12 @@ server:
   port: 8080
 
 storage:
-  type: local
-  path: /app/data/uploads
+  type: minio
+  endpoint: localhost:9000
+  access_key: minioadmin
+  secret_key: minioadmin
+  use_ssl: false
+  bucket: docqa
 
 vectordb:
   type: faiss

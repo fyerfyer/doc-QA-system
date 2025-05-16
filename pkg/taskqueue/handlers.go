@@ -60,7 +60,6 @@ func (p *CallbackProcessor) ProcessCallback(ctx context.Context, callbackData []
 	// 解析回调数据
 	var callback TaskCallback
 	if err := json.Unmarshal(callbackData, &callback); err != nil {
-		p.logger.WithError(err).Error("Failed to unmarshal callback data")
 		return fmt.Errorf("failed to unmarshal callback data: %w", err)
 	}
 
@@ -87,7 +86,6 @@ func (p *CallbackProcessor) ProcessCallback(ctx context.Context, callbackData []
 
 	// 通知状态更新
 	if err := p.queue.NotifyTaskUpdate(ctx, callback.TaskID); err != nil {
-		p.logger.WithError(err).Warnf("Failed to notify task update: %s", callback.TaskID)
 		// 继续处理，不返回错误
 	}
 
@@ -97,18 +95,19 @@ func (p *CallbackProcessor) ProcessCallback(ctx context.Context, callbackData []
 			"task_id": callback.TaskID,
 			"error":   callback.Error,
 		}).Error("Task failed")
-		return nil
 	}
 
 	// 找到对应的处理函数
-	handler := p.defaultFn
-	if h, ok := p.handlers[task.Type]; ok && h != nil {
-		handler = h
+	handlerType := TaskType(callback.Type) // 将字符串转换为TaskType
+	handler, exists := p.handlers[handlerType]
+	if !exists {
+		handler = p.defaultFn
+		p.logger.WithField("type", callback.Type).Info("No handler registered for task type: " + callback.Type)
 	}
 
 	// 如果没有处理函数，直接返回
 	if handler == nil {
-		p.logger.Infof("No handler registered for task type: %s", task.Type)
+		p.logger.Debug("No handler available for task type: " + callback.Type)
 		return nil
 	}
 
@@ -151,23 +150,26 @@ func (p *CallbackProcessor) HandleCallback(ctx context.Context, req *CallbackReq
 	if req.Timestamp != "" {
 		// Try multiple formats to parse the timestamp
 		formats := []string{
-			time.RFC3339,                // Standard: "2006-01-02T15:04:05Z07:00"
-			"2006-01-02T15:04:05",       // Without timezone
-			"2006-01-02T15:04:05.999999", // With microseconds
+			time.RFC3339,                 // 2006-01-02T15:04:05Z07:00
+            "2006-01-02T15:04:05Z",       // 带Z的UTC时间
+            "2006-01-02T15:04:05.999999", // 带毫秒不带时区
+            "2006-01-02T15:04:05",        // 不带时区
 		}
 
 		var parseErr error
 		for _, format := range formats {
 			timestamp, parseErr = time.Parse(format, req.Timestamp)
 			if parseErr == nil {
-				// Successfully parsed
 				break
 			}
 		}
 
 		if parseErr != nil {
-			// If all formats failed, log warning and use current time
-			p.logger.WithError(parseErr).Warn("Failed to parse timestamp, using current time")
+			// If all parsing attempts failed, use current time but log warning
+			p.logger.WithFields(logrus.Fields{
+				"timestamp": req.Timestamp,
+				"error":     parseErr,
+			}).Warn("Failed to parse timestamp, using current time")
 			timestamp = time.Now()
 		}
 	} else {
@@ -186,7 +188,7 @@ func (p *CallbackProcessor) HandleCallback(ctx context.Context, req *CallbackReq
 		Timestamp:  timestamp,
 	}
 
-	// 转换为JSON
+	// Rest of the function remains unchanged
 	callbackData, err := json.Marshal(callback)
 	if err != nil {
 		p.logger.WithError(err).Error("Failed to marshal callback data")
@@ -376,4 +378,12 @@ func (p *CallbackProcessor) RegisterDefaultHandlers(queue Queue) {
 	p.RegisterHandler(TaskProcessComplete, DefaultProcessCompleteHandler(context.Background(), queue, p.logger))
 
 	p.logger.Info("Registered default task handlers")
+}
+
+func (p *CallbackProcessor) GetRegisteredHandlerTypes() map[TaskType]bool {
+    result := make(map[TaskType]bool)
+    for handlerType := range p.handlers {
+        result[handlerType] = true
+    }
+    return result
 }

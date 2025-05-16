@@ -1,9 +1,10 @@
 import os
 import logging
 from abc import ABC, abstractmethod
-from typing import Dict, Any, BinaryIO
+from typing import Dict, Any, BinaryIO, Union, Optional
 from pathlib import Path
 
+from app.utils.minio_client import get_minio_client
 
 class BaseParser(ABC):
     """文档解析器的基类，提供通用接口和功能"""
@@ -16,6 +17,7 @@ class BaseParser(ABC):
             logger: 可选的日志记录器，如果不提供则创建一个新的
         """
         self.logger = logger or logging.getLogger(__name__)
+        self.minio_client = get_minio_client()
 
     @abstractmethod
     def parse(self, file_path: str) -> str:
@@ -23,7 +25,7 @@ class BaseParser(ABC):
         解析文档文件并返回文本内容
 
         Args:
-            file_path: 文档文件路径
+            file_path: 文档文件路径 (可以是本地路径或MinIO中的路径)
 
         Returns:
             str: 提取的文本内容
@@ -61,20 +63,37 @@ class BaseParser(ABC):
         Returns:
             Dict: 文档元数据，如标题、作者、页数等
         """
-        # 默认实现返回基本文件信息
-        if not os.path.exists(file_path):
-            self.logger.error(f"File not found: {file_path}")
-            raise FileNotFoundError(f"File not found: {file_path}")
+        try:
+            # 尝试从MinIO获取元数据
+            try:
+                minio_metadata = self.minio_client.get_object_metadata(file_path)
+                file_name = os.path.basename(file_path)
 
-        file_stats = os.stat(file_path)
-        file_name = os.path.basename(file_path)
+                return {
+                    "filename": file_name,
+                    "file_size": minio_metadata["size"],
+                    "modified_time": minio_metadata["last_modified"].timestamp() if hasattr(minio_metadata["last_modified"], "timestamp") else 0,
+                    "extension": self.get_file_extension(file_path),
+                    "content_type": minio_metadata.get("content_type", "")
+                }
+            except FileNotFoundError:
+                # 如果MinIO中不存在，尝试本地文件系统
+                if not os.path.exists(file_path):
+                    self.logger.error(f"File not found: {file_path}")
+                    raise FileNotFoundError(f"File not found: {file_path}")
 
-        return {
-            "filename": file_name,
-            "file_size": file_stats.st_size,
-            "modified_time": file_stats.st_mtime,
-            "extension": self.get_file_extension(file_path)
-        }
+                file_stats = os.stat(file_path)
+                file_name = os.path.basename(file_path)
+
+                return {
+                    "filename": file_name,
+                    "file_size": file_stats.st_size,
+                    "modified_time": file_stats.st_mtime,
+                    "extension": self.get_file_extension(file_path)
+                }
+        except Exception as e:
+            self.logger.error(f"Error getting metadata: {str(e)}")
+            raise
 
     def validate_file(self, file_path: str, max_size_mb: int = 100) -> None:
         """
@@ -88,21 +107,42 @@ class BaseParser(ABC):
             FileNotFoundError: 文件不存在
             ValueError: 文件太大或格式不支持
         """
-        if not os.path.exists(file_path):
-            self.logger.error(f"File not found: {file_path}")
-            raise FileNotFoundError(f"File not found: {file_path}")
+        try:
+            # 检查文件是否存在（先尝试MinIO，再尝试本地）
+            file_exists = False
+            file_size = 0
 
-        # 检查文件大小
-        file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
-        if file_size_mb > max_size_mb:
-            self.logger.error(f"File too large: {file_size_mb:.2f}MB > {max_size_mb}MB")
-            raise ValueError(f"File too large: {file_size_mb:.2f}MB exceeds limit of {max_size_mb}MB")
+            try:
+                if self.minio_client.file_exists(file_path):
+                    metadata = self.minio_client.get_object_metadata(file_path)
+                    file_exists = True
+                    file_size = metadata["size"]
+            except Exception as e:
+                self.logger.debug(f"MinIO check failed, trying local file system: {str(e)}")
 
-        # 检查文件类型
-        ext = self.get_file_extension(file_path)
-        if not self.supports_extension(ext):
-            self.logger.error(f"Unsupported file extension: {ext}")
-            raise ValueError(f"Unsupported file extension: {ext}")
+            if not file_exists and not os.path.exists(file_path):
+                self.logger.error(f"File not found: {file_path}")
+                raise FileNotFoundError(f"File not found: {file_path}")
+
+            if not file_exists:  # 如果不在MinIO中，则获取本地文件大小
+                file_size = os.path.getsize(file_path)
+
+            # 检查文件大小
+            file_size_mb = file_size / (1024 * 1024)
+            if file_size_mb > max_size_mb:
+                self.logger.error(f"File too large: {file_size_mb:.2f}MB > {max_size_mb}MB")
+                raise ValueError(f"File too large: {file_size_mb:.2f}MB exceeds limit of {max_size_mb}MB")
+
+            # 检查文件类型
+            ext = self.get_file_extension(file_path)
+            if not self.supports_extension(ext):
+                self.logger.error(f"Unsupported file extension: {ext}")
+                raise ValueError(f"Unsupported file extension: {ext}")
+        except FileNotFoundError:
+            raise
+        except Exception as e:
+            self.logger.error(f"Error validating file: {str(e)}")
+            raise
 
     def get_file_extension(self, file_path: str) -> str:
         """
@@ -182,3 +222,23 @@ class BaseParser(ABC):
 
         # 如果没有找到合适的标题，使用文件名
         return os.path.splitext(filename)[0]
+
+    def get_file_content(self, file_path: str) -> BinaryIO:
+        """
+        获取文件内容（支持MinIO和本地文件系统）
+
+        Args:
+            file_path: 文件路径
+
+        Returns:
+            BinaryIO: 文件二进制流
+        """
+        try:
+            # 尝试从MinIO获取
+            return self.minio_client.get_object(file_path)
+        except FileNotFoundError:
+            # 如果MinIO中不存在，尝试从本地文件系统获取
+            if not os.path.exists(file_path):
+                raise FileNotFoundError(f"File not found: {file_path}")
+
+            return open(file_path, 'rb')
