@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -37,6 +38,7 @@ func DefaultAsyncOptions() *AsyncDocumentOptions {
 		SplitType:    "paragraph",
 		Model:        "default",
 		Priority:     "default",
+		Metadata:     make(map[string]string), // Initialize with empty map instead of nil
 	}
 }
 
@@ -102,7 +104,7 @@ func (s *DocumentService) processDocumentAsync(ctx context.Context, fileID strin
 	// 修改为HTTP调用Python API
 	pythonServiceURL := os.Getenv("PYTHONSERVICE_URL")
 	if pythonServiceURL == "" {
-		pythonServiceURL = "http://py-api:8000"
+		pythonServiceURL = "http://localhost:8000"
 	}
 
 	// 准备API请求参数
@@ -135,23 +137,45 @@ func (s *DocumentService) processDocumentAsync(ctx context.Context, fileID strin
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		s.logger.WithError(err).Error("Failed to send document processing request")
-		return fmt.Errorf("failed to send document processing request: %w", err)
+		s.logger.WithError(err).WithField("document_id", fileID).Error("Failed to send request to Python service")
+		return fmt.Errorf("failed to send request to Python service: %w", err)
 	}
 	defer resp.Body.Close()
 
-	// 处理响应
+	// Check for non-successful status code
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		respBody, _ := io.ReadAll(resp.Body)
+		errMsg := fmt.Sprintf("python service returned status %d: %s", resp.StatusCode, string(respBody))
+		s.logger.WithFields(logrus.Fields{
+			"status_code": resp.StatusCode,
+			"document_id": fileID,
+			"response":    string(respBody),
+		}).Error("Python service returned error response")
+		
+		// Mark the document as failed
+		if err := s.statusManager.MarkAsFailed(ctx, fileID, errMsg); err != nil {
+			s.logger.WithError(err).Error("Failed to mark document as failed")
+		}
+		
+		return fmt.Errorf(errMsg)
+	}
+
+	// Process the response
 	var respBody struct {
 		TaskID string `json:"task_id"`
 		Status string `json:"status"`
 	}
+
 	if err := json.NewDecoder(resp.Body).Decode(&respBody); err != nil {
-		s.logger.WithError(err).Error("Failed to decode document processing response")
-		return fmt.Errorf("failed to decode document processing response: %w", err)
+		s.logger.WithError(err).WithField("document_id", fileID).Error("Failed to decode response from Python service")
+		return fmt.Errorf("failed to decode response: %w", err)
 	}
 
-	// 使用响应中的任务ID
+	// Use the response task ID
 	taskID := respBody.TaskID
+	if taskID == "" {
+		s.logger.WithField("document_id", fileID).Warn("Python service returned empty task ID")
+	}
 
 	s.logger.WithFields(logrus.Fields{
 		"file_id": fileID,

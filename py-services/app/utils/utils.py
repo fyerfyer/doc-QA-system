@@ -1,3 +1,4 @@
+import datetime
 import os
 import time
 from typing import Dict, Any, Optional
@@ -39,51 +40,51 @@ def setup_logger(log_level: str = "INFO") -> None:
     )
 
 
-def parse_redis_url(url: Optional[str] = None) -> Dict[str, Any]:
-    """
-    解析Redis URL为连接参数
+def parse_redis_url(url):
+    """解析Redis URL，提取连接参数"""
+    # 检查URL前缀
+    if not url.startswith("redis://"):
+        raise ValueError(f"Unsupported Redis URL format: {url}")
 
-    参数:
-        url: Redis URL, 例如: redis://user:password@localhost:6379/0
-             如果为None, 则使用环境变量REDIS_URL
+    # 移除redis://前缀
+    url = url.replace("redis://", "")
 
-    返回:
-        Dict[str, Any]: Redis连接参数
-    """
-    if url is None:
-        url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-
-    # 简单的URL解析
-    if "://" in url:
-        _, url = url.split("://", 1)
-
-    auth_host, *db_parts = url.split("/")
-    db = int(db_parts[0]) if db_parts else 0
-
-    if "@" in auth_host:
-        auth, host_port = auth_host.split("@", 1)
-
+    # 解析认证部分
+    if "@" in url:
+        auth, rest = url.split("@", 1)
         if ":" in auth:
             _, password = auth.split(":", 1)
         else:
             password = auth
     else:
-        password = ""
-        host_port = auth_host
+        password = None
+        rest = url
 
+    # 解析主机和端口
+    host_port = rest.split("/")[0]
     if ":" in host_port:
-        host, port = host_port.split(":", 1)
-        port = int(port)
+        host, port_str = host_port.split(":", 1)
+        port = int(port_str)
     else:
         host = host_port
-        port = 6379
+        port = 6379  # 默认Redis端口
+
+    # 解析数据库
+    db = 0  # 默认数据库
+    db_parts = rest.split("/")[1:]
+    if db_parts and db_parts[0]:  # 确保db_parts[0]不为空字符串
+        try:
+            db = int(db_parts[0])
+        except ValueError:
+            # 如果无法解析为整数，使用默认值0
+            logger.warning(f"Invalid database number in Redis URL, using default (0): {url}")
 
     return {
         "host": host,
         "port": port,
         "db": db,
-        "password": password or None,
-        "decode_responses": True,
+        "password": password,
+        "decode_responses": True
     }
 
 
@@ -141,30 +142,33 @@ def format_task_info(task: Any) -> Dict[str, Any]:
     return info
 
 
-def send_callback(callback_url: str, data: Dict[str, Any], timeout: int = 10) -> bool:
-    """
-    发送回调请求到指定URL
-
-    参数:
-        callback_url: 回调URL
-        data: 要发送的数据
-        timeout: 请求超时时间(秒)
-
-    返回:
-        bool: 是否成功
-    """
+def send_callback(url, data):
+    """Send a callback to the specified URL with the provided data."""
     try:
+        # Fix the timestamp handling - the issue is here
+        if "timestamp" in data:
+            # Don't check instance type, just ensure it's a string
+            if not isinstance(data["timestamp"], str):
+                data["timestamp"] = str(data["timestamp"])
+        
+        # Ensure status is a string
+        if "status" in data and not isinstance(data["status"], str):
+            data["status"] = str(data["status"])
+            
+        # Ensure type is a string
+        if "type" in data and not isinstance(data["type"], str):
+            data["type"] = str(data["type"])
+            
         headers = {"Content-Type": "application/json"}
-        response = requests.post(
-            url=callback_url,
-            json=data,
-            headers=headers,
-            timeout=timeout
-        )
-        response.raise_for_status()
+        response = requests.post(url, json=data, headers=headers, timeout=5)
+        
+        if response.status_code >= 400:
+            logger.error(f"Failed to send callback to {url}: {response.status_code} {response.reason}")
+            return False
+            
         return True
     except Exception as e:
-        logger.error(f"Failed to send callback to {callback_url}: {str(e)}")
+        logger.error(f"Exception sending callback to {url}: {str(e)}")
         return False
 
 

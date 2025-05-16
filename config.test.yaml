@@ -1,0 +1,55 @@
+server:
+  host: 0.0.0.0
+  port: 8080
+
+storage:
+  type: minio
+  minio:
+    endpoint: localhost:9000
+    access_key: minioadmin
+    secret_key: minioadmin
+    use_ssl: false
+    bucket: docqa
+    region: us-east-1
+
+vectordb:
+  type: faiss
+  path: ./data/vectordb
+  dim: 1536
+  distance: cosine
+
+database:
+  type: sqlite
+  dsn: ./data/docqa.db
+
+cache:
+  enable: true
+  type: redis
+  address: localhost:6379
+  ttl: 3600
+
+queue:
+  enable: true
+  type: redis
+  redis_addr: localhost:6379
+  concurrency: 10
+
+document:
+  chunk_size: 1000
+  chunk_overlap: 200
+
+embed:
+  provider: "tongyi"
+  model: "text-embedding-v3"
+  api_key: "${DASHSCOPE_API_KEY}"
+
+llm:
+  provider: "tongyi"
+  model: "qwen-turbo"
+  api_key: "${DASHSCOPE_API_KEY}"
+  max_tokens: 1000
+  temperature: 0.7
+
+search:
+  limit: 10
+  min_score: 0.5

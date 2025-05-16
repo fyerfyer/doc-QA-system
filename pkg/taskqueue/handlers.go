@@ -137,9 +137,8 @@ type CallbackResponse struct {
 }
 
 // HandleCallback 处理HTTP回调请求
-// 可在HTTP处理器中使用此函数处理回调请求
 func (p *CallbackProcessor) HandleCallback(ctx context.Context, req *CallbackRequest) (*CallbackResponse, error) {
-	// 记录收到的回调请求
+	// Record received callback
 	p.logger.WithFields(logrus.Fields{
 		"task_id":     req.TaskID,
 		"document_id": req.DocumentID,
@@ -147,24 +146,36 @@ func (p *CallbackProcessor) HandleCallback(ctx context.Context, req *CallbackReq
 		"type":        req.Type,
 	}).Info("Received callback request")
 
-	// 将请求转换为TaskCallback
-	// 解析时间戳字符串
+	// Parse timestamp with flexible formats
 	var timestamp time.Time
-	var err error
-
 	if req.Timestamp != "" {
-		// 尝试解析时间戳
-		timestamp, err = time.Parse(time.RFC3339, req.Timestamp)
-		if err != nil {
-			// 如果解析失败，使用当前时间
-			p.logger.WithError(err).Warn("Failed to parse timestamp, using current time")
+		// Try multiple formats to parse the timestamp
+		formats := []string{
+			time.RFC3339,                // Standard: "2006-01-02T15:04:05Z07:00"
+			"2006-01-02T15:04:05",       // Without timezone
+			"2006-01-02T15:04:05.999999", // With microseconds
+		}
+
+		var parseErr error
+		for _, format := range formats {
+			timestamp, parseErr = time.Parse(format, req.Timestamp)
+			if parseErr == nil {
+				// Successfully parsed
+				break
+			}
+		}
+
+		if parseErr != nil {
+			// If all formats failed, log warning and use current time
+			p.logger.WithError(parseErr).Warn("Failed to parse timestamp, using current time")
 			timestamp = time.Now()
 		}
 	} else {
-		// 如果没有提供时间戳，使用当前时间
+		// If no timestamp provided, use current time
 		timestamp = time.Now()
 	}
 
+	// Create callback object
 	callback := &TaskCallback{
 		TaskID:     req.TaskID,
 		DocumentID: req.DocumentID,
