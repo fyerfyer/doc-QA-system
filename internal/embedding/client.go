@@ -96,7 +96,7 @@ func DefaultConfig() *Config {
 		Model:       "text-embedding-v1", // 通义千问默认嵌入模型
 		Timeout:     30 * time.Second,
 		MaxRetries:  3,
-		Dimensions:  1536, // 通义千问模型默认维度，可能需要根据实际模型调整
+		Dimensions:  1024, // 通义千问模型默认维度，可能需要根据实际模型调整
 		BatchSize:   16,
 		EnableCache: false,
 	}

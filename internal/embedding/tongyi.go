@@ -82,7 +82,7 @@ func NewTongyiClient(opts ...Option) (Client, error) {
 	// 确定维度设置
 	dimensions := cfg.Dimensions
 	if dimensions == 0 {
-		dimensions = 1536 // 默认维度
+		dimensions = 1024 // 默认维度
 	}
 
 	client := &TongyiClient{

@@ -175,7 +175,7 @@ func setDefaults(v *viper.Viper) {
 	// 向量数据库默认配置
 	v.SetDefault("vectordb.type", "faiss")
 	v.SetDefault("vectordb.path", "./vectordb")
-	v.SetDefault("vectordb.dim", 1536) // OpenAI embedding 维度
+	v.SetDefault("vectordb.dim", 1024) // Qwen embedding 维度
 	v.SetDefault("vectordb.distance", "cosine")
 
 	// LLM默认配置
