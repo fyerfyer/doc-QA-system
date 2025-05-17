@@ -38,7 +38,7 @@ func DefaultAsyncOptions() *AsyncDocumentOptions {
 		SplitType:    "paragraph",
 		Model:        "default",
 		Priority:     "default",
-		Metadata:     make(map[string]string), // Initialize with empty map instead of nil
+		Metadata:     make(map[string]string), // 初始化一个空map，避免nil错误
 	}
 }
 
@@ -142,7 +142,7 @@ func (s *DocumentService) processDocumentAsync(ctx context.Context, fileID strin
 	}
 	defer resp.Body.Close()
 
-	// Check for non-successful status code
+	// 检查失败的响应状态
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		respBody, _ := io.ReadAll(resp.Body)
 		errMsg := fmt.Sprintf("python service returned status %d: %s", resp.StatusCode, string(respBody))
@@ -151,16 +151,16 @@ func (s *DocumentService) processDocumentAsync(ctx context.Context, fileID strin
 			"document_id": fileID,
 			"response":    string(respBody),
 		}).Error("Python service returned error response")
-		
-		// Mark the document as failed
+
+		// 将文档标记为失败
 		if err := s.statusManager.MarkAsFailed(ctx, fileID, errMsg); err != nil {
 			s.logger.WithError(err).Error("Failed to mark document as failed")
 		}
-		
+
 		return fmt.Errorf(errMsg)
 	}
 
-	// Process the response
+	// 处理响应
 	var respBody struct {
 		TaskID string `json:"task_id"`
 		Status string `json:"status"`
@@ -171,7 +171,7 @@ func (s *DocumentService) processDocumentAsync(ctx context.Context, fileID strin
 		return fmt.Errorf("failed to decode response: %w", err)
 	}
 
-	// Use the response task ID
+	// 使用响应的任务ID
 	taskID := respBody.TaskID
 	if taskID == "" {
 		s.logger.WithField("document_id", fileID).Warn("Python service returned empty task ID")
@@ -274,10 +274,10 @@ func (s *DocumentService) registerCustomizedTaskHandlers() {
 		return
 	}
 
-	// Create the callback processor
-	processor := taskqueue.NewCallbackProcessor(s.taskQueue, s.logger)
+	// 获取共享处理器
+	processor := taskqueue.GetSharedCallbackProcessor(s.taskQueue, s.logger)
 
-	// Register our customized process_complete handler
+	// 注册自定义的任务处理器
 	processor.RegisterHandler(taskqueue.TaskProcessComplete, func(ctx context.Context, task *taskqueue.Task, result json.RawMessage) error {
 		var completeResult taskqueue.ProcessCompleteResult
 		if err := json.Unmarshal(result, &completeResult); err != nil {
@@ -295,7 +295,7 @@ func (s *DocumentService) registerCustomizedTaskHandlers() {
 			"vector_status": completeResult.VectorStatus,
 		}).Info("Document processing completed")
 
-		// Handle explicit errors
+		// 处理明显的错误
 		if completeResult.Error != "" {
 			s.logger.WithField("error", completeResult.Error).Error("Document processing failed with error")
 			if err := s.statusManager.MarkAsFailed(ctx, task.DocumentID, completeResult.Error); err != nil {
@@ -304,15 +304,25 @@ func (s *DocumentService) registerCustomizedTaskHandlers() {
 			return fmt.Errorf("document processing failed: %s", completeResult.Error)
 		}
 
-		// If parse and chunk are successful, mark document as completed even if vectorize failed
+		// 如果解析和分块都成功，标记文档为已完成
 		if completeResult.ParseStatus == "completed" && completeResult.ChunkStatus == "completed" {
 			s.logger.WithField("document_id", task.DocumentID).Info("Marking document as completed based on completed parsing and chunking")
+
+			// Debug日志
+			s.logger.WithFields(logrus.Fields{
+				"document_id": task.DocumentID,
+				"chunk_count": completeResult.ChunkCount,
+			}).Debug("Attempting to mark document as completed")
+
 			if err := s.statusManager.MarkAsCompleted(ctx, task.DocumentID, completeResult.ChunkCount); err != nil {
 				s.logger.WithError(err).Error("Failed to mark document as completed")
 				return err
 			}
-			
-			// Log warning if vectorization failed
+
+			// Debug日志
+			s.logger.WithField("document_id", task.DocumentID).Debug("Document marked as completed successfully")
+
+			// 如果向量化失败，仅使用日志警告
 			if completeResult.VectorStatus == "failed" {
 				s.logger.WithField("document_id", task.DocumentID).Warn(
 					"Document marked as completed but vectorization failed. Search functionality may be limited.")
@@ -322,7 +332,10 @@ func (s *DocumentService) registerCustomizedTaskHandlers() {
 		return nil
 	})
 
-	// Register other handlers as needed
+	// 注册其他需要的处理器
+	processor.RegisterHandler(taskqueue.TaskDocumentParse, s.handleDocumentParseResult)
+	processor.RegisterHandler(taskqueue.TaskTextChunk, s.handleTextChunkResult)
+	processor.RegisterHandler(taskqueue.TaskVectorize, s.handleVectorizeResult)
 
 	s.logger.Info("Registered customized task handlers")
 }
@@ -447,20 +460,20 @@ func (s *DocumentService) handleProcessCompleteResult(ctx context.Context, task 
 
 		if err := s.saveVectorsToDatabase(ctx, task.DocumentID, &vectorResult); err != nil {
 			s.logger.WithError(err).Error("Failed to save vectors to database")
-			// Continue processing, don't fail the whole operation
+			// 继续处理，不影响文档完成状态
 		}
 	}
 
-	// Check if parse and chunk steps succeeded, mark document as completed
-	// even if vectorization failed
+	// 检查解析和分块状态，如果都成功，则标记文档为已完成
+	// 即使向量化失败，也要标记为完成
 	if completeResult.ParseStatus == "completed" && completeResult.ChunkStatus == "completed" {
 		// 标记文档为已完成状态
 		if err := s.statusManager.MarkAsCompleted(ctx, task.DocumentID, completeResult.ChunkCount); err != nil {
 			s.logger.WithError(err).Error("Failed to mark document as completed")
 			return err
 		}
-		
-		// Log warning if vectorization failed
+
+		// 如果向量化失败，仅使用日志警告
 		if completeResult.VectorStatus == "failed" {
 			s.logger.WithField("document_id", task.DocumentID).Warn(
 				"Document marked as completed but vectorization failed. Search functionality may be limited.")

@@ -48,14 +48,6 @@ func (p *CallbackProcessor) SetDefaultHandler(handler TaskCallbackHandler) {
 }
 
 // ProcessCallback 处理回调数据
-// 参数:
-//
-//	ctx: 上下文
-//	callbackData: 回调数据JSON
-//
-// 返回:
-//
-//	error: 处理错误
 func (p *CallbackProcessor) ProcessCallback(ctx context.Context, callbackData []byte) error {
 	// 解析回调数据
 	var callback TaskCallback
@@ -137,7 +129,7 @@ type CallbackResponse struct {
 
 // HandleCallback 处理HTTP回调请求
 func (p *CallbackProcessor) HandleCallback(ctx context.Context, req *CallbackRequest) (*CallbackResponse, error) {
-	// Record received callback
+	// 记录返回的回调信息
 	p.logger.WithFields(logrus.Fields{
 		"task_id":     req.TaskID,
 		"document_id": req.DocumentID,
@@ -145,15 +137,14 @@ func (p *CallbackProcessor) HandleCallback(ctx context.Context, req *CallbackReq
 		"type":        req.Type,
 	}).Info("Received callback request")
 
-	// Parse timestamp with flexible formats
+	// 使用不同的时间格式解析时间戳，以兼容py-services的时间格式
 	var timestamp time.Time
 	if req.Timestamp != "" {
-		// Try multiple formats to parse the timestamp
 		formats := []string{
 			time.RFC3339,                 // 2006-01-02T15:04:05Z07:00
-            "2006-01-02T15:04:05Z",       // 带Z的UTC时间
-            "2006-01-02T15:04:05.999999", // 带毫秒不带时区
-            "2006-01-02T15:04:05",        // 不带时区
+			"2006-01-02T15:04:05Z",       // 带Z的UTC时间
+			"2006-01-02T15:04:05.999999", // 带毫秒不带时区
+			"2006-01-02T15:04:05",        // 不带时区
 		}
 
 		var parseErr error
@@ -165,7 +156,7 @@ func (p *CallbackProcessor) HandleCallback(ctx context.Context, req *CallbackReq
 		}
 
 		if parseErr != nil {
-			// If all parsing attempts failed, use current time but log warning
+			// 如果解析失败，使用当前时间并记录警告
 			p.logger.WithFields(logrus.Fields{
 				"timestamp": req.Timestamp,
 				"error":     parseErr,
@@ -173,11 +164,11 @@ func (p *CallbackProcessor) HandleCallback(ctx context.Context, req *CallbackReq
 			timestamp = time.Now()
 		}
 	} else {
-		// If no timestamp provided, use current time
+		// 如果没有提供时间戳，使用当前时间
 		timestamp = time.Now()
 	}
 
-	// Create callback object
+	// 创建回调对象
 	callback := &TaskCallback{
 		TaskID:     req.TaskID,
 		DocumentID: req.DocumentID,
@@ -188,7 +179,6 @@ func (p *CallbackProcessor) HandleCallback(ctx context.Context, req *CallbackReq
 		Timestamp:  timestamp,
 	}
 
-	// Rest of the function remains unchanged
 	callbackData, err := json.Marshal(callback)
 	if err != nil {
 		p.logger.WithError(err).Error("Failed to marshal callback data")
@@ -381,9 +371,9 @@ func (p *CallbackProcessor) RegisterDefaultHandlers(queue Queue) {
 }
 
 func (p *CallbackProcessor) GetRegisteredHandlerTypes() map[TaskType]bool {
-    result := make(map[TaskType]bool)
-    for handlerType := range p.handlers {
-        result[handlerType] = true
-    }
-    return result
+	result := make(map[TaskType]bool)
+	for handlerType := range p.handlers {
+		result[handlerType] = true
+	}
+	return result
 }
