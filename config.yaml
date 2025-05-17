@@ -4,7 +4,7 @@ server:
 
 storage:
   type: minio
-  endpoint: localhost:9000
+  endpoint: minio:9000  
   access_key: minioadmin
   secret_key: minioadmin
   use_ssl: false
@@ -23,13 +23,13 @@ database:
 cache:
   enable: true
   type: redis
-  address: localhost:6379
+  address: redis:6379 
   ttl: 3600
 
 queue:
   enable: true
   type: redis
-  redis_addr: localhost:6379
+  redis_addr: redis:6379  # 已修改为容器服务名称
   concurrency: 10
 
 document:

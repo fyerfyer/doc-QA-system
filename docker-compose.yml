@@ -133,7 +133,7 @@ services:
       timeout: 10s
       retries: 3
 
-  # MinIO服务 - 用于文件存储（可选）
+  # MinIO服务 - 用于文件存储
   minio:
     image: minio/minio:latest
     container_name: docqa-minio
