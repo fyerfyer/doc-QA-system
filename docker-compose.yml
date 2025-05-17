@@ -17,6 +17,7 @@ services:
       - EMBEDDING_MODEL=default
       - CALLBACK_URL=http://go-api:8080/api/tasks/callback
       - PYTHONSERVICE_URL=http://py-api:8000
+      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY:-your_api_key_here}
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
@@ -48,6 +49,11 @@ services:
       - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY:-your_api_key_here}
       - EMBEDDING_MODEL=text-embedding-v3
       - CALLBACK_URL=http://go-api:8080/api/tasks/callback
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - MINIO_BUCKET=docqa
+      - MINIO_SECURE=false
     volumes:
       - ./data:/app/data:ro
       - ./logs:/app/logs
@@ -55,6 +61,7 @@ services:
       - "8000:8000"
     depends_on:
       - redis
+      - minio  # Add dependency on minio
     networks:
       - docqa-network
     healthcheck:
@@ -78,12 +85,18 @@ services:
       - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY:-your_api_key_here}
       - EMBEDDING_MODEL=text-embedding-v3
       - CALLBACK_URL=http://go-api:8080/api/tasks/callback
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+      - MINIO_BUCKET=docqa
+      - MINIO_SECURE=false
     volumes:
       - ./data:/app/data:ro
       - ./logs:/app/logs
     depends_on:
       - redis
       - py-api
+      - minio  # Add dependency on minio
     networks:
       - docqa-network
     healthcheck:
