@@ -13,10 +13,9 @@ import (
 const (
 	// 默认API端点
 	defaultDashScopeEndpoint = "https://dashscope.aliyuncs.com/api/v1/services/embeddings/text-embedding/text-embedding"
-	defaultOpenAIEndpoint    = "https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings"
 
 	// 默认模型
-	defaultModel = "text-embedding-v1"
+	defaultModel = "text-embedding-v3"
 )
 
 // DashScopeRequest 定义DashScope请求结构体
@@ -62,11 +61,7 @@ func NewTongyiClient(opts ...Option) (Client, error) {
 	if endpoint == "" {
 		// 默认使用DashScope API
 		endpoint = defaultDashScopeEndpoint
-	} else if endpoint == "openai" || endpoint == "compatible" {
-		// 使用OpenAI兼容API
-		endpoint = defaultOpenAIEndpoint
-		useOpenAIAPI = true
-	}
+	} 
 
 	// 确定模型名称
 	model := cfg.Model

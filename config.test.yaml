@@ -39,12 +39,14 @@ document:
 embed:
   provider: "tongyi"
   model: "text-embedding-v3"
-  api_key: "${DASHSCOPE_API_KEY}"
+  api_key: ${DASHSCOPE_API_KEY}
+  endpoint: "https://dashscope.aliyuncs.com/api/v1/services/embeddings/text-embedding/text-embedding"
 
 llm:
   provider: "tongyi"
   model: "qwen-turbo"
-  api_key: "${DASHSCOPE_API_KEY}"
+  api_key: ${DASHSCOPE_API_KEY}
+  endpoint: "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
   max_tokens: 1000
   temperature: 0.7
 

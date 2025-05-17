@@ -12,24 +12,24 @@ storage:
 
 vectordb:
   type: faiss
-  path: /app/data/vectordb
-  dim: 1536
+  path: ./data/vectordb
+  dim: 1024
   distance: cosine
 
 database:
   type: sqlite
-  dsn: /app/data/docqa.db
+  dsn: ./data/docqa.db
 
 cache:
   enable: true
   type: redis
-  address: redis:6379
+  address: localhost:6379
   ttl: 3600
 
 queue:
   enable: true
   type: redis
-  redis_addr: redis:6379
+  redis_addr: localhost:6379
   concurrency: 10
 
 document:
@@ -39,12 +39,14 @@ document:
 embed:
   provider: "tongyi"
   model: "text-embedding-v3"
-  api_key: "${DASHSCOPE_API_KEY}"
+  api_key: ${DASHSCOPE_API_KEY}
+  endpoint: "https://dashscope.aliyuncs.com/api/v1/services/embeddings/text-embedding/text-embedding"
 
 llm:
   provider: "tongyi"
   model: "qwen-turbo"
-  api_key: "${DASHSCOPE_API_KEY}"
+  api_key: ${DASHSCOPE_API_KEY}
+  endpoint: "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
   max_tokens: 1000
   temperature: 0.7
 

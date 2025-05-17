@@ -156,8 +156,34 @@ func Load(configPath string) (*Config, error) {
 	if err := v.Unmarshal(&config); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %v", err)
 	}
+	
+	// 添加新函数调用来处理环境变量替换
+	resConfig := processEnvironmentVariables(&config)
 
-	return &config, nil
+	return resConfig, nil
+}
+
+// 添加这个新函数来处理所有配置项中的环境变量
+func processEnvironmentVariables(cfg *Config) *Config {
+    // 处理嵌入API密钥
+    if strings.HasPrefix(cfg.Embed.APIKey, "${") && strings.HasSuffix(cfg.Embed.APIKey, "}") {
+        envVar := cfg.Embed.APIKey[2 : len(cfg.Embed.APIKey)-1]
+        if envVal := os.Getenv(envVar); envVal != "" {
+            cfg.Embed.APIKey = envVal
+        }
+    }
+    
+    // 处理LLM API密钥
+    if strings.HasPrefix(cfg.LLM.APIKey, "${") && strings.HasSuffix(cfg.LLM.APIKey, "}") {
+        envVar := cfg.LLM.APIKey[2 : len(cfg.LLM.APIKey)-1]
+        if envVal := os.Getenv(envVar); envVal != "" {
+            cfg.LLM.APIKey = envVal
+        }
+    }
+    
+    // 可以添加更多配置项的处理
+    
+    return cfg
 }
 
 // setDefaults 设置配置的默认值
