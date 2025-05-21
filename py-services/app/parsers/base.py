@@ -108,24 +108,35 @@ class BaseParser(ABC):
             ValueError: 文件太大或格式不支持
         """
         try:
-            # 检查文件是否存在（先尝试MinIO，再尝试本地）
+            # 检查是否是Windows风格的路径
+            is_windows_path = file_path and (file_path.startswith('C:') or file_path.startswith('D:') or ':\\' in file_path)
+            
+            # 检查文件是否存在
             file_exists = False
             file_size = 0
 
-            try:
-                if self.minio_client.file_exists(file_path):
-                    metadata = self.minio_client.get_object_metadata(file_path)
+            # 如果是Windows路径，只检查本地文件系统
+            if is_windows_path:
+                if os.path.exists(file_path):
                     file_exists = True
-                    file_size = metadata["size"]
-            except Exception as e:
-                self.logger.debug(f"MinIO check failed, trying local file system: {str(e)}")
+                    file_size = os.path.getsize(file_path)
+            else:
+                # 非Windows路径，先尝试MinIO，再尝试本地
+                try:
+                    if self.minio_client.file_exists(file_path):
+                        metadata = self.minio_client.get_object_metadata(file_path)
+                        file_exists = True
+                        file_size = metadata["size"]
+                except Exception as e:
+                    self.logger.debug(f"MinIO check failed, trying local file system: {str(e)}")
+                    
+                    if os.path.exists(file_path):
+                        file_exists = True
+                        file_size = os.path.getsize(file_path)
 
-            if not file_exists and not os.path.exists(file_path):
+            if not file_exists:
                 self.logger.error(f"File not found: {file_path}")
                 raise FileNotFoundError(f"File not found: {file_path}")
-
-            if not file_exists:  # 如果不在MinIO中，则获取本地文件大小
-                file_size = os.path.getsize(file_path)
 
             # 检查文件大小
             file_size_mb = file_size / (1024 * 1024)
@@ -233,12 +244,25 @@ class BaseParser(ABC):
         Returns:
             BinaryIO: 文件二进制流
         """
+        # 检查是否是Windows风格的路径
+        is_windows_path = file_path and (file_path.startswith('C:') or file_path.startswith('D:') or ':\\' in file_path)
+        
+        # Windows路径直接从本地文件系统读取，不尝试从MinIO获取
+        if is_windows_path:
+            if os.path.exists(file_path):
+                return open(file_path, 'rb')
+            else:
+                raise FileNotFoundError(f"File not found: {file_path}")
+        
+        # 非Windows路径，尝试从MinIO获取
         try:
             # 尝试从MinIO获取
             return self.minio_client.get_object(file_path)
-        except FileNotFoundError:
-            # 如果MinIO中不存在，尝试从本地文件系统获取
-            if not os.path.exists(file_path):
+        except Exception as e:
+            self.logger.debug(f"Error getting file from MinIO: {str(e)}, trying local filesystem")
+            
+            # 如果从MinIO获取失败，尝试从本地文件系统获取
+            if os.path.exists(file_path):
+                return open(file_path, 'rb')
+            else:
                 raise FileNotFoundError(f"File not found: {file_path}")
-
-            return open(file_path, 'rb')

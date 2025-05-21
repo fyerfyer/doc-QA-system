@@ -34,6 +34,8 @@ go.work.sum
 
 # Python bytecode
 *.pyc
+refactor.txt
+通义千问api.txt
 
 # Logs
 *.log

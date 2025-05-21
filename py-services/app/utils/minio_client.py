@@ -1,5 +1,7 @@
 import os
 import io
+import datetime
+import mimetypes
 from typing import BinaryIO, Dict, Any
 from minio import Minio
 from minio.error import S3Error
@@ -56,17 +58,24 @@ class MinioClient:
     def get_object(self, file_path: str) -> BinaryIO:
         """
         从MinIO获取文件对象
-
+        
         参数:
             file_path: MinIO中的文件路径
-
+            
         返回:
             BinaryIO: 文件内容的二进制流
-
+            
         异常:
             S3Error: MinIO操作错误
             FileNotFoundError: 文件不存在
         """
+        # 检查是否是Windows风格的路径
+        if file_path and (file_path.startswith('C:') or file_path.startswith('D:') or ':\\' in file_path):
+            # Windows路径直接从本地文件系统获取
+            if not os.path.exists(file_path):
+                raise FileNotFoundError(f"File not found: {file_path}")
+            return open(file_path, 'rb')
+            
         try:
             response = self.client.get_object(self.bucket, file_path)
             return response
@@ -93,6 +102,20 @@ class MinioClient:
 
     def get_object_metadata(self, file_path: str) -> Dict[str, Any]:
         """获取文件元数据"""
+        # 检查是否是Windows风格的路径
+        if file_path and (file_path.startswith('C:') or file_path.startswith('D:') or ':\\' in file_path):
+            # Windows路径不在MinIO中查找，使用本地文件系统
+            if not os.path.exists(file_path):
+                raise FileNotFoundError(f"File not found: {file_path}")
+            
+            stat = os.stat(file_path)
+            return {
+                "size": stat.st_size,
+                "last_modified": datetime.datetime.fromtimestamp(stat.st_mtime),
+                "content_type": mimetypes.guess_type(file_path)[0] or "application/octet-stream",
+                "metadata": {}
+            }
+            
         try:
             stat = self.client.stat_object(self.bucket, file_path)
             return {
@@ -109,6 +132,11 @@ class MinioClient:
 
     def file_exists(self, file_path: str) -> bool:
         """检查文件是否存在"""
+        # 检查是否是Windows风格的路径
+        if file_path and (file_path.startswith('C:') or file_path.startswith('D:') or ':\\' in file_path):
+            # Windows路径不在MinIO中查找
+            return False
+            
         try:
             self.client.stat_object(self.bucket, file_path)
             return True

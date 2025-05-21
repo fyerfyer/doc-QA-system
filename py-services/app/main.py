@@ -19,8 +19,16 @@ from app.worker.tasks import (
     parse_document, chunk_text, vectorize_text, process_document,
     get_redis_client, get_task_from_redis
 )
+
+# 导入现有API路由器
 from app.api.health import router as health_router
 from app.api.callback import router as callback_router
+
+# 导入新的API路由器
+from app.api.document_api import router as document_router
+from app.api.chunking_api import router as chunking_router
+from app.api.embedding_api import router as embedding_api_router
+
 from app.utils.route_display import print_routes
 
 # 初始化日志
@@ -76,9 +84,14 @@ try:
 except Exception as e:
     logger.error(f"Failed to initialize MinIO client: {str(e)}")
 
-# Include the API routers
+# 注册现有的API路由器
 app.include_router(health_router)
 app.include_router(callback_router)
+
+# 注册新的API路由器
+app.include_router(document_router)
+app.include_router(chunking_router)
+app.include_router(embedding_api_router)
 
 # API请求模型
 class DocumentParseRequest(BaseModel):
@@ -434,6 +447,22 @@ async def task_callback(request: Request):
             detail="Invalid callback payload"
         )
 
+# 请求处理时间中间件
+@app.middleware("http")
+async def add_process_time_header(request: Request, call_next):
+    """记录请求处理时间的中间件"""
+    start_time = time.time()
+    response = await call_next(request)
+    process_time = time.time() - start_time
+    response.headers["X-Process-Time"] = str(process_time)
+    
+    # 记录请求处理情况
+    status_code = response.status_code
+    path = request.url.path
+    logger.info(f"Request {request.method} {path} completed with status {status_code} in {process_time:.4f}s")
+    
+    return response
+
 # 错误处理
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
@@ -452,6 +481,24 @@ async def generic_exception_handler(request: Request, exc: Exception):
         content={"detail": "An unexpected error occurred"}
     )
 
+# 根路由 - 添加版本和API列表信息
+@app.get("/")
+async def root():
+    """根路径，返回服务基本信息"""
+    return {
+        "service": "Document QA Python Service",
+        "version": app.version,
+        "status": "active",
+        "docs_url": "/docs",
+        "redoc_url": "/redoc",
+        "health_check": "/api/health",
+        "new_endpoints": {
+            "document_api": "/api/python/documents",
+            "chunking_api": "/api/python/documents/chunk",
+            "embedding_api": "/api/python/embeddings"
+        }
+    }
+
 # 主入口
 if __name__ == "__main__":
     # 启动Uvicorn服务器
@@ -461,6 +508,6 @@ if __name__ == "__main__":
         "app.main:app",
         host=host,
         port=port,
-        reload=False,
+        reload=os.getenv("ENVIRONMENT", "development").lower() == "development",
         log_level=os.getenv("LOG_LEVEL", "info").lower()
     )
