@@ -74,7 +74,7 @@ async def generate_embedding(
 
 @router.post("/embeddings/batch")
 async def generate_embeddings_batch(
-    texts: List[str] = Body(..., description="List of texts to generate embeddings for"),
+    texts: List[str] = Body(..., embed=True, description="List of texts to generate embeddings for"),
     model: str = Query("default", description="Embedding model name"),
     dimension: int = Query(None, description="Vector dimension (only for models that support it)"),
     normalize: bool = Query(False, description="Whether to normalize vectors (L2 norm)")

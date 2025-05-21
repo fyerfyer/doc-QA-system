@@ -33,9 +33,9 @@ def test_generate_embedding(api_key):
     """Test single text embedding generation"""
     # 准备请求数据
     json_data = {
-        "text": SAMPLE_TEXTS[0]
+        "text": SAMPLE_TEXTS[0] 
     }
-    
+
     params = {
         "model": "text-embedding-v3"
     }
@@ -171,7 +171,7 @@ def test_embedding_with_invalid_input():
     # 测试无文本
     json_data = {}
     response = client.post("/api/python/embeddings", json=json_data)
-    assert response.status_code == 400
+    assert response.status_code == 422
     
     # 测试批量嵌入的无效输入
     json_data = {
@@ -186,7 +186,7 @@ def test_embedding_with_invalid_input():
         # 缺少 text2
     }
     response = client.post("/api/python/embeddings/similarity", json=json_data)
-    assert response.status_code == 400
+    assert response.status_code == 422
 
 def test_embedding_dimension_parameter(api_key):
     """Test embedding generation with dimension parameter"""
