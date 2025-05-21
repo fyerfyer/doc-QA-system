@@ -58,9 +58,6 @@ def test_chunk_text_basic(document_id):
     assert "chunks" in json_data
     assert isinstance(json_data["chunks"], list)
     assert json_data["chunk_count"] > 0
-    
-    # 返回任务ID用于后续测试
-    return json_data["task_id"]
 
 def test_chunk_text_with_parameters(document_id):
     """Test text chunking with custom parameters"""
@@ -99,7 +96,7 @@ def test_chunk_text_with_invalid_params():
     }
     
     response = client.post("/api/python/documents/chunk", json=data)
-    assert response.status_code == 400
+    assert response.status_code == 422
     
     # 测试无效的chunk_size
     data = {

@@ -73,9 +73,12 @@ async def chunk_text(
         if store_result:
             # 创建任务对象
             task_id = f"chunk_{document_id}_{uuid.uuid4().hex[:8]}"
+            
+            chunk_dicts = [{"text": chunk.text, "index": chunk.index} for chunk in chunks]
+            
             result = TextChunkResult(
                 document_id=document_id,
-                chunks=chunks,
+                chunks=chunk_dicts,
                 chunk_count=len(chunks)
             )
             
