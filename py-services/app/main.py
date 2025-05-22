@@ -7,6 +7,10 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+# 导入环境变量
+from dotenv import load_dotenv
+load_dotenv()
+
 from app.utils.utils import setup_logger, logger, get_task_key
 from app.worker.tasks import get_redis_client
 
