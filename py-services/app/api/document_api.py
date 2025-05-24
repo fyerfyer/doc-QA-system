@@ -23,7 +23,8 @@ async def parse_document(
     file: Optional[UploadFile] = File(None),
     file_path: Optional[str] = Form(None),
     document_id: str = Form(...),
-    store_result: bool = Form(True)
+    store_result: bool = Form(True),
+    original_filename: Optional[str] = Form(None)  # Add this parameter
 ):
     """
     解析文档内容
@@ -97,15 +98,20 @@ async def parse_document(
                 if not file_exists:
                     raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
                 
+                # 获取用于解析器检测的文件名 - 如果提供了original_filename，则使用它
+                filename = original_filename or os.path.basename(file_path)
+                
+                # 使用原始文件名中的扩展名进行解析器选择
+                ext = os.path.splitext(filename)[1][1:] if filename and '.' in filename else ""
+                
                 # 检测文件类型
                 mime_type = detect_content_type(file_path)
                 
                 # 创建并使用解析器
-                parser = create_parser(file_path, mime_type)
+                parser = create_parser(file_path, mime_type, ext)  # Pass the extension as fallback
                 content = parser.parse(file_path)
                 
                 # 提取标题和元数据
-                filename = os.path.basename(file_path)
                 title = parser.extract_title(content, filename)
                 meta = parser.get_metadata(file_path)
                 
@@ -115,6 +121,7 @@ async def parse_document(
         # 创建解析结果
         result = DocumentParseResult(
             content=content,
+            document_id=document_id,
             title=title,
             meta=meta,
             pages=meta.get('page_count', 1) if isinstance(meta, dict) else 1,

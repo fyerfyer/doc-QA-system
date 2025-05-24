@@ -41,12 +41,6 @@ func (p *CallbackProcessor) RegisterHandler(taskType TaskType, handler TaskCallb
 	p.logger.Infof("Registered handler for task type: %s", taskType)
 }
 
-// SetDefaultHandler 设置默认处理函数
-func (p *CallbackProcessor) SetDefaultHandler(handler TaskCallbackHandler) {
-	p.defaultFn = handler
-	p.logger.Info("Set default task callback handler")
-}
-
 // ProcessCallback 处理回调数据
 func (p *CallbackProcessor) ProcessCallback(ctx context.Context, callbackData []byte) error {
 	// 解析回调数据

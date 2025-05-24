@@ -12,6 +12,7 @@ import (
 
 	"github.com/fyerfyer/doc-QA-system/internal/database"
 	"github.com/fyerfyer/doc-QA-system/internal/models"
+	"github.com/fyerfyer/doc-QA-system/internal/pyprovider"
 	"github.com/fyerfyer/doc-QA-system/internal/repository"
 	"github.com/fyerfyer/doc-QA-system/pkg/taskqueue"
 	"github.com/sirupsen/logrus"
@@ -527,7 +528,7 @@ func TestAsyncDocumentProcessing(t *testing.T) {
 	// 创建用于异步处理的 Redis 队列
 	queueConfig := &taskqueue.Config{
 		RedisAddr:   "localhost:6379",
-		RedisDB:     15, // 使用 DB 15 进行测试
+		RedisDB:     0, // 这里换成python后端使用的RedisDB，不然会failed
 		Concurrency: 2,
 		RetryLimit:  2,
 		RetryDelay:  time.Second,
@@ -653,176 +654,177 @@ func TestAsyncDocumentProcessing(t *testing.T) {
 	})
 }
 
-// TestCallbackHandlers 测试异步处理的各种回调处理程序
-func TestCallbackHandlers(t *testing.T) {
-	// 如果 Redis 不可用则跳过
-	redisConn, err := taskqueue.NewRedisQueue(&taskqueue.Config{
-		RedisAddr: "localhost:6379",
-		RedisDB:   15,
-	})
+func TestDocumentServiceWithPythonClient(t *testing.T) {
+    // 创建用于本地文件的临时目录
+    tempDir, err := os.MkdirTemp("", "docqa-python-test-*")
+    require.NoError(t, err)
+    defer os.RemoveAll(tempDir)
 
-	if err != nil {
-		t.Skip("Redis 不可用，跳过回调处理程序测试:", err)
-		return
-	}
-	defer redisConn.Close()
+    // 创建测试文件
+    testContent := "这是一个Python解析测试文档内容。\n\n这是第二段落。\n\n这是第三段落。"
+    testFile := filepath.Join(tempDir, "python_test.txt")
+    err = os.WriteFile(testFile, []byte(testContent), 0644)
+    require.NoError(t, err)
 
-	// 创建临时目录
-	tempDir, err := os.MkdirTemp("", "docqa-handlers-test-*")
-	require.NoError(t, err)
-	defer os.RemoveAll(tempDir)
+    // 设置 MinIO 客户端配置
+    minioConfig := storage.MinioConfig{
+        Endpoint:  "localhost:9000",
+        AccessKey: "minioadmin",
+        SecretKey: "minioadmin",
+        Bucket:    "docqa",
+        UseSSL:    false,
+    }
+    minioStorage, err := storage.NewMinioStorage(minioConfig)
+    require.NoError(t, err, "Failed to create MinIO storage client")
 
-	// 设置测试环境
-	docService, _, statusManager := setupDocumentTestEnv(t, tempDir)
+    // 上传测试文件到 MinIO
+    file, err := os.Open(testFile)
+    require.NoError(t, err)
+    defer file.Close()
 
-	// 创建 Redis 队列
-	queue, err := taskqueue.NewRedisQueue(&taskqueue.Config{
-		RedisAddr: "localhost:6379",
-		RedisDB:   15,
-	})
-	require.NoError(t, err)
-	defer queue.Close()
+    // 包含文件扩展名
+    fileID := "python-test-file.txt"
+    fileInfo, err := minioStorage.Save(file, fileID)
+    require.NoError(t, err, "Failed to upload test file to MinIO")
+    t.Logf("File uploaded to MinIO: %s", fileInfo.Path)
 
-	// 启用异步处理
-	docService.EnableAsyncProcessing(queue)
+    // 创建 Python 客户端
+    config := pyprovider.DefaultConfig()
+    client, err := pyprovider.NewClient(config)
+    require.NoError(t, err)
+    pythonClient := pyprovider.NewDocumentClient(client)
+    require.NotNil(t, pythonClient)
 
-	ctx := context.Background()
+    // 设置文档服务依赖
+    splitterConfig := document.DefaultSplitterConfig()
+    splitterConfig.ChunkSize = 100
+    textSplitter := document.NewTextSplitter(splitterConfig)
+    embeddingClient := &testEmbeddingClient{dimension: 4}
 
-	// 在数据库中创建一个测试文档
-	docID := "callback-test-doc"
-	status := statusManager.MarkAsUploaded(ctx, docID, "test.txt", "path/to/test.txt", 1000)
-	require.NoError(t, status)
+    vectorDBConfig := vectordb.Config{
+        Type:      "memory",
+        Dimension: 4,
+    }
+    vectorDB, err := vectordb.NewRepository(vectorDBConfig)
+    require.NoError(t, err)
 
-	// 测试文档解析结果处理程序
-	t.Run("DocumentParseResultHandler", func(t *testing.T) {
-		task := &taskqueue.Task{
-			ID:         "parse-task",
-			Type:       taskqueue.TaskDocumentParse,
-			DocumentID: docID,
-			Status:     taskqueue.StatusCompleted,
-		}
+    // 创建文档仓库
+    repo := repository.NewDocumentRepository()
+    logger := logrus.New()
+    logger.SetLevel(logrus.DebugLevel)
+    statusManager := NewDocumentStatusManager(repo, logger)
 
-		result := taskqueue.DocumentParseResult{
-			Content: "This is test content for parse result",
-			Title:   "Test Document",
-			Words:   5,
-			Chars:   35,
-		}
+    // 创建带 Python 客户端的文档服务
+    docService := NewDocumentService(
+        minioStorage, // 使用 MinIO 存储
+        &testParser{},
+        textSplitter,
+        embeddingClient,
+        vectorDB,
+        WithPythonClient(pythonClient),
+        WithUsePythonAPI(true),
+        WithDocumentRepository(repo),
+        WithStatusManager(statusManager),
+        WithTimeout(30*time.Second),
+    )
 
-		resultJSON, _ := json.Marshal(result)
+    ctx := context.Background()
+    fileID = "python-test-file.txt"
 
-		// 首先将文档设置为处理中状态
-		err = statusManager.MarkAsProcessing(ctx, docID)
-		require.NoError(t, err)
+    // 用 MinIO 路径设置文档初始状态
+    err = statusManager.MarkAsUploaded(ctx, fileID, "python_test.txt", fileInfo.Path, fileInfo.Size)
+    require.NoError(t, err, "Failed to create initial document record")
 
-		// 调用处理程序
-		err = docService.handleDocumentParseResult(ctx, task, resultJSON)
-		require.NoError(t, err)
+    // 使用 Python API 和 MinIO 路径处理文档
+    t.Run("ProcessDocumentWithPythonAPI", func(t *testing.T) {
+        err = docService.ProcessDocument(ctx, fileID, fileInfo.Path)
+        require.NoError(t, err, "Document processing should succeed")
 
-		// 检查文档进度是否更新
-		doc, err := statusManager.GetDocument(ctx, docID)
-		require.NoError(t, err)
-		assert.Greater(t, doc.Progress, 0)
-	})
+        // 检查文档状态
+        status, err := statusManager.GetStatus(ctx, fileID)
+        require.NoError(t, err)
+        assert.Equal(t, models.DocStatusCompleted, status)
 
-	// 测试文本分块结果处理程序
-	t.Run("TextChunkResultHandler", func(t *testing.T) {
-		task := &taskqueue.Task{
-			ID:         "chunk-task",
-			Type:       taskqueue.TaskTextChunk,
-			DocumentID: docID,
-			Status:     taskqueue.StatusCompleted,
-		}
+        // 验证向量存储
+        filter := vectordb.SearchFilter{
+            FileIDs:    []string{fileID},
+            MaxResults: 10,
+        }
+        queryVector := make([]float32, 4)
+        results, err := vectorDB.Search(queryVector, filter)
+        require.NoError(t, err)
+        assert.Equal(t, 3, len(results), "There should be 3 paragraphs vectorized")
+    })
 
-		result := taskqueue.TextChunkResult{
-			DocumentID: docID,
-			Chunks: []taskqueue.ChunkInfo{
-				{Text: "Chunk 1", Index: 0},
-				{Text: "Chunk 2", Index: 1},
-			},
-			ChunkCount: 2,
-		}
+    // 测试禁用 Python API 时回退到本地解析器
+    t.Run("FallbackToLocalParser", func(t *testing.T) {
+        localFileID := "local-fallback-test"
+        err = statusManager.MarkAsUploaded(ctx, localFileID, "python_test.txt", fileInfo.Path, fileInfo.Size)
+        require.NoError(t, err)
 
-		resultJSON, _ := json.Marshal(result)
+        // 创建禁用 Python API 的服务
+        localService := NewDocumentService(
+            minioStorage,
+            &testParser{},
+            textSplitter,
+            embeddingClient,
+            vectorDB,
+            WithPythonClient(pythonClient),
+            WithUsePythonAPI(false), // 禁用 Python API
+            WithDocumentRepository(repo),
+            WithStatusManager(statusManager),
+        )
 
-		// 调用处理程序
-		err = docService.handleTextChunkResult(ctx, task, resultJSON)
-		require.NoError(t, err)
+        err = localService.ProcessDocument(ctx, localFileID, fileInfo.Path)
+        require.NoError(t, err)
 
-		// 检查文档进度是否更新
-		doc, err := statusManager.GetDocument(ctx, docID)
-		require.NoError(t, err)
-		assert.Greater(t, doc.Progress, 30)
-	})
+        status, err := statusManager.GetStatus(ctx, localFileID)
+        require.NoError(t, err)
+        assert.Equal(t, models.DocStatusCompleted, status)
+    })
 
-	// 测试向量化结果处理程序
-	t.Run("VectorizeResultHandler", func(t *testing.T) {
-		task := &taskqueue.Task{
-			ID:         "vector-task",
-			Type:       taskqueue.TaskVectorize,
-			DocumentID: docID,
-			Status:     taskqueue.StatusCompleted,
-		}
+    // 测试 Python 服务失败时的回退
+    t.Run("FallbackWhenPythonFails", func(t *testing.T) {
+        // 创建一个无效配置的 Python 客户端
+        badConfig := pyprovider.DefaultConfig()
+        badConfig.BaseURL = "http://nonexistent-service:9999/api"
+        badConfig.Timeout = 2 * time.Second // 快速失败
+        badClient, _ := pyprovider.NewClient(badConfig)
+        badPythonClient := pyprovider.NewDocumentClient(badClient)
 
-		result := taskqueue.VectorizeResult{
-			DocumentID: docID,
-			Vectors: []taskqueue.VectorInfo{
-				{ChunkIndex: 0, Vector: []float32{0.1, 0.2, 0.3, 0.4}},
-				{ChunkIndex: 1, Vector: []float32{0.5, 0.6, 0.7, 0.8}},
-			},
-			VectorCount: 2,
-			Model:       "test-model",
-			Dimension:   4,
-		}
+        fallbackFileID := "python-fallback-test"
+        err = statusManager.MarkAsUploaded(ctx, fallbackFileID, "python_test.txt", fileInfo.Path, fileInfo.Size)
+        require.NoError(t, err)
 
-		resultJSON, _ := json.Marshal(result)
+        // 创建带有错误 Python 客户端的服务
+        fallbackService := NewDocumentService(
+            minioStorage,
+            &testParser{},
+            textSplitter,
+            embeddingClient,
+            vectorDB,
+            WithPythonClient(badPythonClient),
+            WithUsePythonAPI(true), // 启用但应失败
+            WithDocumentRepository(repo),
+            WithStatusManager(statusManager),
+            WithTimeout(5*time.Second),
+        )
 
-		// 调用处理程序
-		err = docService.handleVectorizeResult(ctx, task, resultJSON)
-		require.NoError(t, err)
+        err = fallbackService.ProcessDocument(ctx, fallbackFileID, fileInfo.Path)
+        require.NoError(t, err, "Should succeed by falling back to local parser")
 
-		// 检查文档是否完成
-		status, err := statusManager.GetStatus(ctx, docID)
-		require.NoError(t, err)
-		assert.Equal(t, models.DocStatusCompleted, status)
-	})
+        status, err := statusManager.GetStatus(ctx, fallbackFileID)
+        require.NoError(t, err)
+        assert.Equal(t, models.DocStatusCompleted, status)
+    })
 
-	// 测试处理完成结果处理程序
-	t.Run("ProcessCompleteResultHandler", func(t *testing.T) {
-		// 为此测试创建另一个文档
-		docID2 := "complete-test-doc"
-		err = statusManager.MarkAsUploaded(ctx, docID2, "test2.txt", "path/to/test2.txt", 1000)
-		require.NoError(t, err)
-
-		task := &taskqueue.Task{
-			ID:         "complete-task",
-			Type:       taskqueue.TaskProcessComplete,
-			DocumentID: docID2,
-			Status:     taskqueue.StatusCompleted,
-		}
-
-		result := taskqueue.ProcessCompleteResult{
-			DocumentID:   docID2,
-			ChunkCount:   3,
-			VectorCount:  3,
-			Dimension:    4,
-			ParseStatus:  "success",
-			ChunkStatus:  "success",
-			VectorStatus: "success",
-		}
-
-		resultJSON, _ := json.Marshal(result)
-
-		// 调用处理程序
-		err = docService.handleProcessCompleteResult(ctx, task, resultJSON)
-		require.NoError(t, err)
-
-		// 检查文档是否完成
-		status, err := statusManager.GetStatus(ctx, docID2)
-		require.NoError(t, err)
-		assert.Equal(t, models.DocStatusCompleted, status)
-	})
+    // 清理 - 从 MinIO 删除文件
+    err = minioStorage.Delete(fileInfo.Path)
+    if err != nil {
+        t.Logf("Warning: Failed to delete test file from MinIO: %v", err)
+    }
 }
+
 
 // testParser 用于测试的简单解析器
 type testParser struct{}

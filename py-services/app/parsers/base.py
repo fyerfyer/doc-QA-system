@@ -1,7 +1,7 @@
 import os
 import logging
 from abc import ABC, abstractmethod
-from typing import Dict, Any, BinaryIO, Union, Optional
+from typing import Dict, Any, BinaryIO
 from pathlib import Path
 
 from app.utils.minio_client import get_minio_client

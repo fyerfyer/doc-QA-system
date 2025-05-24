@@ -87,6 +87,7 @@ class DocumentParsePayload:
 class DocumentParseResult:
     """文档解析任务结果，对应Go中的DocumentParseResult"""
     content: str
+    document_id: str = ""
     title: str = ""
     meta: Dict[str, str] = field(default_factory=dict)
     error: str = ""

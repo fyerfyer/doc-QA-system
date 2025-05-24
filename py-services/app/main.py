@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 load_dotenv()
 
-from app.utils.utils import setup_logger, logger, get_task_key
+from app.utils.utils import setup_logger, logger
 from app.worker.tasks import get_redis_client
 
 # 导入现有API路由器
@@ -22,7 +22,8 @@ from app.api.callback import router as callback_router
 from app.api.document_api import router as document_router
 from app.api.chunking_api import router as chunking_router
 from app.api.embedding_api import router as embedding_api_router
-from app.api.llm_api import router as llm_api_router  # 新增：导入LLM API路由器
+from app.api.llm_api import router as llm_api_router 
+from app.api.task_api import router as task_api_router 
 
 from app.utils.route_display import print_routes
 
@@ -139,15 +140,14 @@ async def add_process_time_header(request: Request, call_next):
     
     return response
 
-# 注册现有的API路由器
+# API路由器
 app.include_router(health_router)
 app.include_router(callback_router)
-
-# 注册新的API路由器
+app.include_router(task_api_router)
 app.include_router(document_router)
 app.include_router(chunking_router)
 app.include_router(embedding_api_router)
-app.include_router(llm_api_router)  # 新增：注册LLM API路由器
+app.include_router(llm_api_router)
 
 # 错误处理
 @app.exception_handler(HTTPException)
