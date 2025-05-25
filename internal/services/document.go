@@ -17,6 +17,7 @@ import (
 	"github.com/fyerfyer/doc-QA-system/pkg/storage"
 	"github.com/fyerfyer/doc-QA-system/pkg/taskqueue"
 	"github.com/sirupsen/logrus"
+	"github.com/google/uuid"
 )
 
 // DocumentService 文档服务
@@ -347,14 +348,60 @@ func (s *DocumentService) parseDocumentWithReader(reader io.Reader, fileName str
     return parser.ParseReader(reader, fileName)
 }
 
-// splitContent 将内容分割成段落
+// splitContent 使用python API或本地分块器进行文本分块
 func (s *DocumentService) splitContent(content string) ([]document.Content, error) {
-	segments, err := s.splitter.Split(content)
-	if err != nil {
-		return nil, fmt.Errorf("failed to split content: %w", err)
-	}
+    // 检查是否使用Python API
+    if s.usePythonAPI && s.pythonClient != nil {
+        s.logger.Debug("Using Python API for text chunking")
+        
+        ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+        defer cancel()
+        
+        // 生成唯一的文档ID，仅用于分块API调用
+        tempDocID := fmt.Sprintf("temp_%s", uuid.New().String()[:8])
+        
+        // 准备分块选项
+        options := &pyprovider.SplitOptions{
+            ChunkSize:    1000, // 默认块大小
+            ChunkOverlap: 200,  // 默认重叠大小
+            SplitType:    "paragraph", // 默认使用段落分割
+            StoreResult:  false,       // 临时分块不需要存储
+            Metadata:     map[string]any{},
+        }
+        
+        // 调用Python API进行文本分块
+        chunks, _, err := s.pythonClient.SplitText(ctx, content, tempDocID, options)
+        if err != nil {
+            s.logger.WithError(err).Warn("Failed to chunk text using Python API, falling back to local splitter")
+            return s.splitContentLocal(content)
+        }
+        
+        // 转换Python API返回的Content到document.Content
+        result := make([]document.Content, len(chunks))
+        for i, chunk := range chunks {
+            result[i] = document.Content{
+                Text:  chunk.Text,
+                Index: chunk.Index,
+            }
+        }
+        
+        s.logger.WithField("chunk_count", len(chunks)).Debug("Successfully chunked text using Python API")
+        return result, nil
+    }
+    
+    // 如果未启用Python API或客户端为nil，使用本地分块器
+    return s.splitContentLocal(content)
+}
 
-	return segments, nil
+// splitContentLocal 使用本地分块器进行文本分块
+// 注：此函数将作为回退方案，在迁移全部完成后可以移除
+func (s *DocumentService) splitContentLocal(content string) ([]document.Content, error) {
+    s.logger.Debug("Using local text chunker")
+    segments, err := s.splitter.Split(content)
+    if err != nil {
+        return nil, fmt.Errorf("failed to split content: %w", err)
+    }
+    return segments, nil
 }
 
 // processBatches 批量处理文本段落

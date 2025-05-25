@@ -50,3 +50,6 @@ __pycache__/
 
 # Self files
 通义千问api.txt
+
+/myenv/
+myenv/

@@ -214,3 +214,116 @@ func (c *DocumentClient) GetDocumentContent(ctx context.Context, documentID stri
 
 	return &response.Result, nil
 }
+
+// Content 表示文本块内容
+type Content struct {
+	Text  string `json:"text"`  // 块文本内容
+	Index int    `json:"index"` // 块索引
+}
+
+// SplitOptions 表示文本分块的选项
+type SplitOptions struct {
+	ChunkSize    int            `json:"chunk_size"`    // 块大小
+	ChunkOverlap int            `json:"chunk_overlap"` // 块重叠大小
+	SplitType    string         `json:"split_type"`    // 分块策略：paragraph, sentence, length, semantic
+	StoreResult  bool           `json:"store_result"`  // 是否存储结果
+	Metadata     map[string]any `json:"metadata"`      // 附加元数据
+}
+
+// SplitTextRequest 表示分块API请求体
+type SplitTextRequest struct {
+	Text         string         `json:"text"`          // 文本内容
+	DocumentID   string         `json:"document_id"`   // 文档ID
+	ChunkSize    int            `json:"chunk_size"`    // 块大小
+	ChunkOverlap int            `json:"chunk_overlap"` // 块重叠大小
+	SplitType    string         `json:"split_type"`    // 分割策略
+	StoreResult  bool           `json:"store_result"`  // 是否存储结果
+	Metadata     map[string]any `json:"metadata"`      // 附加元数据
+}
+
+// ChunkResponse 表示分块API的响应
+type ChunkResponse struct {
+	Success       bool      `json:"success"`         // 是否成功
+	DocumentID    string    `json:"document_id"`     // 文档ID
+	TaskID        string    `json:"task_id"`         // 任务ID
+	Chunks        []Content `json:"chunks"`          // 文本块列表
+	ChunkCount    int       `json:"chunk_count"`     // 块数量
+	ProcessTimeMs int       `json:"process_time_ms"` // 处理时间(毫秒)
+}
+
+// DefaultSplitOptions 返回默认的分块选项
+func DefaultSplitOptions() *SplitOptions {
+	return &SplitOptions{
+		ChunkSize:    1000,
+		ChunkOverlap: 200,
+		SplitType:    "paragraph",
+		StoreResult:  true,
+		Metadata:     make(map[string]any),
+	}
+}
+
+// SplitText 将文本分割成多个块
+func (c *DocumentClient) SplitText(ctx context.Context, text string, documentID string, options *SplitOptions) ([]Content, string, error) {
+	// 使用默认选项（如果未提供）
+	if options == nil {
+		options = DefaultSplitOptions()
+	}
+
+	// 构建请求数据
+	reqData := SplitTextRequest{
+		Text:         text,
+		DocumentID:   documentID,
+		ChunkSize:    options.ChunkSize,
+		ChunkOverlap: options.ChunkOverlap,
+		SplitType:    options.SplitType,
+		StoreResult:  options.StoreResult,
+		Metadata:     options.Metadata,
+	}
+
+	// 构建请求路径
+	reqPath := "/python/documents/chunk"
+
+	// 发送POST请求
+	var response ChunkResponse
+	if err := c.client.Post(ctx, reqPath, reqData, &response); err != nil {
+		return nil, "", errors.Wrap(err, "failed to split text")
+	}
+
+	// 检查响应是否成功
+	if !response.Success {
+		return nil, "", fmt.Errorf("failed to split text: API returned failure status")
+	}
+
+	return response.Chunks, response.TaskID, nil
+}
+
+// GetDocumentChunks 获取存储的文档分块结果
+func (c *DocumentClient) GetDocumentChunks(ctx context.Context, documentID string, taskID string) ([]Content, error) {
+	// 构建请求路径
+	reqPath := fmt.Sprintf("/python/documents/%s/chunks", documentID)
+
+	// 添加可选的任务ID查询参数
+	if taskID != "" {
+		reqPath = fmt.Sprintf("%s?task_id=%s", reqPath, taskID)
+	}
+
+	// 发送GET请求
+	var response struct {
+		Success    bool      `json:"success"`
+		DocumentID string    `json:"document_id"`
+		TaskID     string    `json:"task_id"`
+		Chunks     []Content `json:"chunks"`
+		ChunkCount int       `json:"chunk_count"`
+	}
+
+	if err := c.client.Get(ctx, reqPath, &response); err != nil {
+		return nil, errors.Wrap(err, "failed to get document chunks")
+	}
+
+	// 检查响应是否成功
+	if !response.Success {
+		return nil, fmt.Errorf("failed to get document chunks: API returned failure status")
+	}
+
+	return response.Chunks, nil
+}

@@ -1,15 +1,17 @@
 package pyprovider
 
 import (
-    "bytes"
-    "context"
-    "os"
-    "path/filepath"
-    "strings"
-    "testing"
+	"bytes"
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+    "github.com/google/uuid"
 
-    "github.com/stretchr/testify/assert"
-    "github.com/stretchr/testify/require"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestDocumentClientIntegration 测试 DocumentClient 的集成
@@ -107,4 +109,108 @@ func TestDocumentClientIntegration(t *testing.T) {
             assert.NotNil(t, result)
         }
     })
+}
+
+// TestSplitText 测试文本分块功能
+func TestSplitText(t *testing.T) {
+    // 创建配置和客户端
+    config := DefaultConfig()
+    client, err := NewClient(config)
+    require.NoError(t, err)
+    require.NotNil(t, client)
+
+    docClient := NewDocumentClient(client)
+    require.NotNil(t, docClient)
+
+    ctx := context.Background()
+
+    // 测试内容
+    testText := "这是第一个段落，用于测试文本分块功能。\n\n这是第二个段落，同样用于测试。\n\n这是第三个段落，希望能被正确分块。"
+    testDocID := fmt.Sprintf("test-doc-%s", uuid.New().String()[:8])
+
+    // 测试默认选项分块
+    t.Run("SplitTextWithDefaultOptions", func(t *testing.T) {
+        chunks, taskID, err := docClient.SplitText(ctx, testText, testDocID, nil)
+        require.NoError(t, err, "Chunking should not fail")
+        require.NotEmpty(t, chunks, "Should return non-empty chunks")
+        assert.NotEmpty(t, taskID, "Should return a valid task ID")
+        
+        // 验证分块内容
+        assert.GreaterOrEqual(t, len(chunks), 3, "Should have at least 3 chunks")
+        for i, chunk := range chunks {
+            assert.NotEmpty(t, chunk.Text, "Chunk text should not be empty")
+            assert.Equal(t, i, chunk.Index, "Chunk index should match")
+        }
+    })
+
+    // 测试自定义选项分块
+    t.Run("SplitTextWithCustomOptions", func(t *testing.T) {
+        options := &SplitOptions{
+            ChunkSize:    500,
+            ChunkOverlap: 50,
+            SplitType:    "sentence",
+            StoreResult:  true,
+            Metadata: map[string]any{
+                "test_key": "test_value",
+            },
+        }
+
+        chunks, taskID, err := docClient.SplitText(ctx, testText, testDocID, options)
+        require.NoError(t, err, "Chunking with custom options should not fail")
+        require.NotEmpty(t, chunks, "Should return non-empty chunks")
+        assert.NotEmpty(t, taskID, "Should return a valid task ID")
+        
+        // 验证分块内容
+        for i, chunk := range chunks {
+            assert.NotEmpty(t, chunk.Text, "Chunk text should not be empty")
+            assert.Equal(t, i, chunk.Index, "Chunk index should match")
+        }
+    })
+
+    // 测试获取已存储的分块
+    t.Run("GetDocumentChunks", func(t *testing.T) {
+        // 先确保有存储的分块
+        options := &SplitOptions{
+            ChunkSize:    400,
+            ChunkOverlap: 100,
+            SplitType:    "paragraph",
+            StoreResult:  true,
+        }
+        
+        _, taskID, err := docClient.SplitText(ctx, testText, testDocID, options)
+        require.NoError(t, err, "Storing chunks should not fail")
+        require.NotEmpty(t, taskID, "Should return a valid task ID")
+        
+        // 获取已存储的分块
+        chunks, err := docClient.GetDocumentChunks(ctx, testDocID, taskID)
+        require.NoError(t, err, "Getting stored chunks should not fail")
+        require.NotEmpty(t, chunks, "Should return non-empty chunks")
+        
+        // 验证分块内容
+        for i, chunk := range chunks {
+            assert.NotEmpty(t, chunk.Text, "Chunk text should not be empty")
+            assert.Equal(t, i, chunk.Index, "Chunk index should match")
+        }
+    })
+    
+    // 测试边界情况
+    t.Run("EmptyText", func(t *testing.T) {
+        _, _, err := docClient.SplitText(ctx, "", testDocID, nil)
+        require.Error(t, err, "Chunking empty text should fail")
+    })
+
+    t.Run("InvalidChunkSize", func(t *testing.T) {
+        options := &SplitOptions{
+            ChunkSize:    -1,
+            ChunkOverlap: 50,
+        }
+        
+        chunks, _, err := docClient.SplitText(ctx, testText, testDocID, options)
+        if err != nil {
+            require.Error(t, err, "Chunking with invalid options should fail")
+        } else {
+            // Python API 可能会容错并使用默认值
+            assert.NotEmpty(t, chunks, "Should still return chunks using default size")
+        }
+    })  
 }

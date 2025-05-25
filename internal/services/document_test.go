@@ -825,6 +825,166 @@ func TestDocumentServiceWithPythonClient(t *testing.T) {
     }
 }
 
+// TestDocumentServicePythonChunking 测试使用Python API进行文本分块
+func TestDocumentServicePythonChunking(t *testing.T) {
+    // 创建临时目录用于测试
+    tempDir, err := ioutil.TempDir("", "docqa-test-*")
+    require.NoError(t, err)
+    defer os.RemoveAll(tempDir)
+
+    // 创建测试文本内容
+    testContent := "这是第一个段落，用于测试文本分块功能。\n\n这是第二个段落，同样用于测试。\n\n这是第三个段落，希望能被正确分块。"
+    
+    // 设置MinIO客户端配置
+    minioConfig := storage.MinioConfig{
+        Endpoint:  "localhost:9000",
+        AccessKey: "minioadmin",
+        SecretKey: "minioadmin",
+        Bucket:    "docqa",
+        UseSSL:    false,
+    }
+    minioStorage, err := storage.NewMinioStorage(minioConfig)
+    require.NoError(t, err, "Failed to create MinIO storage client")
+
+    // 创建Python客户端
+    config := pyprovider.DefaultConfig()
+    client, err := pyprovider.NewClient(config)
+    require.NoError(t, err)
+    pythonClient := pyprovider.NewDocumentClient(client)
+    require.NotNil(t, pythonClient)
+
+    // 设置测试依赖
+    splitterConfig := document.DefaultSplitterConfig()
+    splitterConfig.ChunkSize = 100
+    textSplitter := document.NewTextSplitter(splitterConfig)
+    embeddingClient := &testEmbeddingClient{dimension: 4}
+
+    vectorDBConfig := vectordb.Config{
+        Type:      "memory",
+        Dimension: 4,
+    }
+    vectorDB, err := vectordb.NewRepository(vectorDBConfig)
+    require.NoError(t, err)
+
+    // 创建文档仓库
+    repo := repository.NewDocumentRepository()
+    logger := logrus.New()
+    logger.SetLevel(logrus.DebugLevel)
+    statusManager := NewDocumentStatusManager(repo, logger)
+
+    // 创建带Python客户端的文档服务
+    docService := NewDocumentService(
+        minioStorage,
+        &testParser{},
+        textSplitter,
+        embeddingClient,
+        vectorDB,
+        WithPythonClient(pythonClient),
+        WithUsePythonAPI(true),
+        WithDocumentRepository(repo),
+        WithStatusManager(statusManager),
+        WithTimeout(30*time.Second),
+    )
+
+    t.Run("TestPythonSplitterVsLocal", func(t *testing.T) {
+        // 使用Python分块
+        pythonChunks, err := docService.splitContent(testContent)
+        require.NoError(t, err, "Python chunking should not fail")
+        assert.NotEmpty(t, pythonChunks, "Python should return non-empty chunks")
+        
+        // 临时禁用Python API，使用本地分块
+        docService.usePythonAPI = false
+        localChunks, err := docService.splitContent(testContent)
+        require.NoError(t, err, "Local chunking should not fail")
+        docService.usePythonAPI = true // 重新启用
+
+        // 比较两种方法的分块数量
+        t.Logf("Python chunking produced %d chunks, local chunking produced %d chunks", 
+            len(pythonChunks), len(localChunks))
+        
+        // 验证两种方法都产生了分块
+        assert.NotEmpty(t, localChunks, "Local should return non-empty chunks")
+    })
+
+    t.Run("TestFallbackToLocalSplitter", func(t *testing.T) {
+        // 创建无效的Python客户端进行测试
+        invalidConfig := pyprovider.DefaultConfig()
+        invalidConfig.BaseURL = "http://nonexistent-host:9999/api"
+        invalidClient, err := pyprovider.NewClient(invalidConfig)
+        require.NoError(t, err)
+        
+        invalidPythonClient := pyprovider.NewDocumentClient(invalidClient)
+
+        // 创建使用无效Python客户端的文档服务
+        fallbackService := NewDocumentService(
+            minioStorage,
+            &testParser{},
+            textSplitter,
+            embeddingClient,
+            vectorDB,
+            WithPythonClient(invalidPythonClient),
+            WithUsePythonAPI(true),
+            WithDocumentRepository(repo),
+        )
+
+        // 测试分块 - 应该自动回退到本地分块器
+        chunks, err := fallbackService.splitContent(testContent)
+        require.NoError(t, err, "Should fallback to local chunker without error")
+        assert.NotEmpty(t, chunks, "Fallback should return non-empty chunks")
+        
+        // 验证回退分块数量应该和本地分块数量一致
+        localChunks, err := textSplitter.Split(testContent)
+        require.NoError(t, err)
+        assert.Equal(t, len(localChunks), len(chunks), "Fallback should match local chunking")
+    })
+
+    t.Run("TestExtensivePythonSplitting", func(t *testing.T) {
+        // 创建更复杂的测试内容
+        complexContent := `
+# 文档标题
+
+## 第一节
+
+这是第一节的内容。本节包含多个段落和一些复杂结构。
+
+这是第一节的第二个段落。
+
+## 第二节
+
+这是第二节的内容，包括以下列表项:
+- 第一项
+- 第二项
+- 第三项
+
+### 第二节的子部分
+
+这是子部分的内容。
+
+## 第三节
+
+这是最后一节的内容。`
+
+        // 使用Python分块
+        pythonChunks, err := docService.splitContent(complexContent)
+        require.NoError(t, err, "Python chunking should not fail on complex content")
+        assert.NotEmpty(t, pythonChunks, "Python should return non-empty chunks for complex content")
+        
+        t.Logf("Python chunking produced %d chunks for complex content", len(pythonChunks))
+        
+        // 使用不同的分块选项测试
+        ctx := context.Background()
+        options := &pyprovider.SplitOptions{
+            ChunkSize:    200,
+            ChunkOverlap: 50,
+            SplitType:    "sentence",
+        }
+        
+        rawChunks, _, err := pythonClient.SplitText(ctx, complexContent, "test-complex", options)
+        require.NoError(t, err, "Direct Python API call should not fail")
+        
+        t.Logf("Direct Python API chunking with custom options produced %d chunks", len(rawChunks))
+    })
+}
 
 // testParser 用于测试的简单解析器
 type testParser struct{}
