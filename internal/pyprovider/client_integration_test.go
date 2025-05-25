@@ -9,19 +9,6 @@ import (
     "github.com/stretchr/testify/require"
 )
 
-// Embedding API 结构体
-type EmbeddingRequest struct {
-    Text string `json:"text"`
-}
-
-type EmbeddingResponse struct {
-    Success    bool      `json:"success"`
-    Model      string    `json:"model"`
-    Dimension  int       `json:"dimension"`
-    Embedding  []float64 `json:"embedding"`
-    TextLength int       `json:"text_length"`
-}
-
 // RAG API 结构体
 type RAGRequest struct {
     Query           string   `json:"query"`

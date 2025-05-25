@@ -4,12 +4,11 @@ import (
     "bytes"
     "context"
     "encoding/json"
+    "errors"
     "fmt"
     "io"
     "net/http"
     "time"
-
-    "github.com/pkg/errors"
 )
 
 // Client 是Python服务的HTTP客户端接口
@@ -37,7 +36,7 @@ type APIError struct {
 }
 
 func (e *APIError) Error() string {
-    return fmt.Sprintf("API错误(状态码: %d): %s - %s", e.StatusCode, e.Message, e.Detail)
+    return fmt.Sprintf("API error (status code: %d): %s - %s", e.StatusCode, e.Message, e.Detail)
 }
 
 // NewClient 创建一个新的Python服务HTTP客户端
@@ -72,7 +71,7 @@ func (c *HTTPClient) Get(ctx context.Context, path string, result interface{}) e
 
     req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
     if err != nil {
-        return errors.Wrap(err, "创建请求失败")
+        return fmt.Errorf("failed to create request: %w", err)
     }
 
     // 添加请求头
@@ -93,7 +92,7 @@ func (c *HTTPClient) Post(ctx context.Context, path string, data interface{}, re
     if data != nil {
         jsonData, err := json.Marshal(data)
         if err != nil {
-            return errors.Wrap(err, "序列化请求数据失败")
+            return fmt.Errorf("failed to marshal request data: %w", err)
         }
         body = bytes.NewReader(jsonData)
     }
@@ -101,7 +100,7 @@ func (c *HTTPClient) Post(ctx context.Context, path string, data interface{}, re
     // 创建请求
     req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, body)
     if err != nil {
-        return errors.Wrap(err, "创建请求失败")
+        return fmt.Errorf("failed to create request: %w", err)
     }
 
     // 添加请求头
@@ -123,7 +122,7 @@ func (c *HTTPClient) doRequestWithRetry(req *http.Request, result interface{}) e
         if attempt > 0 {
             select {
             case <-req.Context().Done():
-                return errors.Wrap(req.Context().Err(), "请求上下文取消")
+                return fmt.Errorf("request context canceled: %w", req.Context().Err())
             case <-time.After(c.config.RetryDelay * time.Duration(attempt)):
                 // 增加退避时间
             }
@@ -133,26 +132,26 @@ func (c *HTTPClient) doRequestWithRetry(req *http.Request, result interface{}) e
         if lastErr == nil {
             break
         }
-        
+
         fmt.Printf("Request attempt %d failed: %v\n", attempt+1, lastErr)
     }
 
     if lastErr != nil {
-        return errors.Wrap(lastErr, "HTTP请求失败")
+        return fmt.Errorf("HTTP request failed: %w", lastErr)
     }
     defer resp.Body.Close()
 
     // 读取响应体
     body, err := io.ReadAll(resp.Body)
     if err != nil {
-        return errors.Wrap(err, "读取响应体失败")
+        return fmt.Errorf("failed to read response body: %w", err)
     }
 
     // 检查状态码
     if resp.StatusCode >= 400 {
         apiErr := &APIError{
             StatusCode: resp.StatusCode,
-            Message:    "API调用失败",
+            Message:    "API call failed",
         }
 
         // 尝试解析错误详情
@@ -171,7 +170,7 @@ func (c *HTTPClient) doRequestWithRetry(req *http.Request, result interface{}) e
     // 解析响应体到结果对象
     if result != nil && len(body) > 0 {
         if err := json.Unmarshal(body, result); err != nil {
-            return errors.Wrap(err, "解析响应JSON失败")
+            return fmt.Errorf("failed to unmarshal response JSON: %w", err)
         }
     }
 
