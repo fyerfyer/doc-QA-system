@@ -59,7 +59,8 @@ func setupAsyncTestEnv(t *testing.T, tempDir string) (*DocumentService, *Documen
 	// 创建文本分割器
 	splitterConfig := document.DefaultSplitterConfig()
 	splitterConfig.ChunkSize = 100 // 小块用于测试
-	textSplitter := document.NewTextSplitter(splitterConfig)
+	textSplitter, err := document.NewTextSplitter(splitterConfig)
+	require.NoError(t, err)
 
 	// 创建嵌入客户端
 	embeddingClient := &testEmbeddingClient{dimension: 4}

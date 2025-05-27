@@ -59,34 +59,6 @@ def test_chunk_text_basic(document_id):
     assert isinstance(json_data["chunks"], list)
     assert json_data["chunk_count"] > 0
 
-def test_chunk_text_with_parameters(document_id):
-    """Test text chunking with custom parameters"""
-    data = {
-        "text": SAMPLE_TEXT_CONTENT,
-        "document_id": document_id,
-        "chunk_size": 200,  # 较小的块大小，应该生成更多块
-        "chunk_overlap": 50,
-        "split_type": "length",
-        "store_result": True
-    }
-    
-    response = client.post("/api/python/documents/chunk", json=data)
-    
-    # 检查响应状态码
-    assert response.status_code == 200
-    
-    # 检查响应内容
-    json_data = response.json()
-    assert json_data["success"] is True
-    assert json_data["document_id"] == document_id
-    assert "chunks" in json_data
-    
-    # 验证较小的块大小是否确实生成了较多的块
-    assert len(json_data["chunks"]) > 1
-    
-    # 验证块数与块计数一致
-    assert json_data["chunk_count"] == len(json_data["chunks"])
-
 def test_chunk_text_with_invalid_params():
     """Test text chunking with invalid parameters"""
     # 测试缺少必要参数text

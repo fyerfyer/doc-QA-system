@@ -1,11 +1,20 @@
 # Web框架和异步支持
+starlette>=0.27.0,<0.36.0
+httpx>=0.24.0,<0.27.0
 fastapi>=0.100.0,<0.110.0
 uvicorn>=0.24.0,<0.30.0
 pydantic>=2.0.0,<3.0.0
 
 # 任务队列
 celery>=5.3.0,<5.4.0
-redis>=4.6.0,<5.0.0
+redis<6.0.0,>=5.0.1
+async_timeout>=4.0.0
+
+# LlamaIndex核心和扩展
+llama-index==0.10.68
+llama-index-readers-file==0.1.33
+llama-index-embeddings-huggingface==0.1.5
+llama-index-vector-stores-redis==0.1.2
 
 # 文档解析
 pypdf>=4.0.0,<5.0.0
@@ -13,6 +22,7 @@ markdown>=3.5.0,<4.0.0
 python-docx>=1.0.0,<2.0.0
 python-pptx>=0.6.21,<1.0.0
 beautifulsoup4>=4.12.0,<5.0.0
+pymupdf>=1.23.0,<2.0.0
 
 # 图像处理(用于OCR)
 pdf2image>=1.16.0,<2.0.0

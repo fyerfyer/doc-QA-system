@@ -146,6 +146,37 @@ class MinioClient:
             logger.error(f"Error checking file existence in MinIO: {str(e)}")
             raise
 
+    def download_file(self, file_path: str, local_path: str) -> bool:
+        """
+        从MinIO下载文件到本地路径
+        参数:
+            file_path: MinIO中的文件路径
+            local_path: 本地保存路径
+        返回:
+            bool: 下载是否成功
+        """
+        try:
+            # 从MinIO获取文件对象
+            response = self.get_object(file_path)
+            
+            # 将文件内容写入本地文件
+            with open(local_path, 'wb') as local_file:
+                for data in response.stream(32*1024):
+                    local_file.write(data)
+            
+            # 关闭响应对象
+            response.close()
+            response.release_conn()
+            
+            logger.info(f"Successfully downloaded file from MinIO: {file_path} to {local_path}")
+            return True
+        except FileNotFoundError:
+            logger.error(f"File not found in MinIO: {file_path}")
+            return False
+        except Exception as e:
+            logger.error(f"Error downloading file from MinIO: {str(e)}")
+            return False
+
 # 创建全局实例供导入使用
 minio_client = MinioClient()
 

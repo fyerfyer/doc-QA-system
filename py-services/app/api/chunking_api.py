@@ -4,8 +4,9 @@ import json
 import uuid
 import time
 
-# 导入应用内部的组件
-from app.chunkers.splitter import split_text
+# 导入新的文档处理模块
+from app.document_processing.factory import create_chunker
+from app.document_processing.utils import format_chunk_for_embedding
 from app.utils.utils import logger
 from app.models.model import Task, TaskType, TaskStatus, TextChunkResult, ChunkInfo
 from app.worker.tasks import get_redis_client, get_task_from_redis
@@ -19,7 +20,7 @@ async def chunk_text(
     document_id: str = Body(..., description="Document ID"),
     chunk_size: int = Body(1000, description="Chunk size in characters or tokens"),
     chunk_overlap: int = Body(200, description="Overlap size between chunks"),
-    split_type: str = Body("paragraph", description="Splitting strategy (paragraph, sentence, length, semantic)"),
+    split_type: str = Body("paragraph", description="Splitting strategy (paragraph, sentence, semantic)"),
     store_result: bool = Body(True, description="Whether to store the chunking result"),
     metadata: Optional[Dict[str, Any]] = Body(None, description="Additional metadata")
 ):
@@ -31,7 +32,7 @@ async def chunk_text(
     - document_id: 文档ID
     - chunk_size: 块大小（字符数或标记数）
     - chunk_overlap: 块之间的重叠大小
-    - split_type: 分割策略，如paragraph、sentence、length
+    - split_type: 分割策略，如paragraph、sentence
     - store_result: 是否存储分块结果
     - metadata: 附加元数据
     """
@@ -57,17 +58,15 @@ async def chunk_text(
         
         metadata["document_id"] = document_id
         
-        # 执行文本分块
-        chunks_data = split_text(
-            text=text,
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap,
-            split_type=split_type,
-            metadata=metadata
-        )
+        # 创建分块器并执行文本分块 (使用新的LlamaIndex-based chunker)
+        chunker = create_chunker(chunk_size, chunk_overlap, split_type)
+        chunks_data = chunker.chunk_text(text, metadata)
+        
+        # 格式化分块结果 - 使format_chunk_for_embedding确保结果一致性
+        chunks_data = [format_chunk_for_embedding(chunk) for chunk in chunks_data]
         
         # 转换为ChunkInfo对象
-        chunks = [ChunkInfo(text=chunk['text'], index=chunk['index']) for chunk in chunks_data]
+        chunks = [ChunkInfo(text=chunk["text"], index=chunk["index"]) for chunk in chunks_data]
         
         # 存储结果（如果需要）
         if store_result:
@@ -136,6 +135,7 @@ async def get_document_chunks(
     - document_id: 文档ID
     - task_id: 可选的任务ID，如果提供则从该任务中获取结果
     """
+    # 此端点主要使用Redis获取存储的结果，不需要改动
     try:
         redis_client = get_redis_client()
         

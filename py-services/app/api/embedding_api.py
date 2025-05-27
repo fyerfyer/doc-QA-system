@@ -5,7 +5,6 @@ import time
 # 导入嵌入模型工厂和相关工具
 from app.embedders.factory import create_embedder, get_default_embedder
 from app.utils.utils import logger
-from app.models.model import Task, TaskType, TaskStatus
 
 # 创建路由器
 router = APIRouter(prefix="/api/python", tags=["embeddings"])

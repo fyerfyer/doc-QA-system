@@ -16,27 +16,27 @@ import (
 	"github.com/fyerfyer/doc-QA-system/internal/vectordb"
 	"github.com/fyerfyer/doc-QA-system/pkg/storage"
 	"github.com/fyerfyer/doc-QA-system/pkg/taskqueue"
-	"github.com/sirupsen/logrus"
 	"github.com/google/uuid"
+	"github.com/sirupsen/logrus"
 )
 
 // DocumentService 文档服务
 // 负责协调文档解析、分段、嵌入和存储
 type DocumentService struct {
-    storage       storage.Storage               // 文件存储服务
-    parser        document.Parser               // 文档解析器
-    splitter      document.Splitter             // 文本分段器
-    embedder      embedding.Client              // 嵌入模型客户端
-    vectorDB      vectordb.Repository           // 向量数据库
-    repo          repository.DocumentRepository // 文档元数据存储
-    statusManager *DocumentStatusManager        // 文档状态管理器
-    taskQueue     taskqueue.Queue               // 任务队列
-    asyncEnabled  bool                          // 是否启用异步处理
-    batchSize     int                           // 批处理大小
-    timeout       time.Duration                 // 处理超时时间
-    logger        *logrus.Logger                // 日志记录器
-    pythonClient  *pyprovider.DocumentClient    // Python文档解析客户端
-    usePythonAPI  bool                          // 是否使用Python API
+	storage       storage.Storage               // 文件存储服务
+	parser        document.Parser               // 文档解析器
+	splitter      document.Splitter             // 文本分段器
+	embedder      embedding.Client              // 嵌入模型客户端
+	vectorDB      vectordb.Repository           // 向量数据库
+	repo          repository.DocumentRepository // 文档元数据存储
+	statusManager *DocumentStatusManager        // 文档状态管理器
+	taskQueue     taskqueue.Queue               // 任务队列
+	asyncEnabled  bool                          // 是否启用异步处理
+	batchSize     int                           // 批处理大小
+	timeout       time.Duration                 // 处理超时时间
+	logger        *logrus.Logger                // 日志记录器
+	pythonClient  *pyprovider.DocumentClient    // Python文档解析客户端
+	usePythonAPI  bool                          // 是否使用Python API
 }
 
 // DocumentOption 文档服务配置选项
@@ -129,10 +129,10 @@ func WithAsyncProcessing(enabled bool) DocumentOption {
 
 // WithPythonClient 配置Python文档解析客户端
 func WithPythonClient(client *pyprovider.DocumentClient) DocumentOption {
-    return func(s *DocumentService) {
-        s.pythonClient = client
-        s.usePythonAPI = client != nil
-    }
+	return func(s *DocumentService) {
+		s.pythonClient = client
+		s.usePythonAPI = client != nil
+	}
 }
 
 // WithUsePythonAPI 设置是否使用Python API
@@ -156,18 +156,18 @@ func (s *DocumentService) Init() error {
 	}
 
 	// 如果启用了Python API但没有设置客户端，尝试创建默认的Python客户端
-    if s.usePythonAPI && s.pythonClient == nil {
-        s.logger.Info("Attempting to create default Python document client")
-        config := pyprovider.DefaultConfig()
-        baseClient, err := pyprovider.NewClient(config)
-        if err != nil {
-            s.logger.WithError(err).Warn("Failed to create Python client, disabling Python API")
-            s.usePythonAPI = false
-        } else {
-            s.pythonClient = pyprovider.NewDocumentClient(baseClient)
-            s.logger.Info("Successfully created default Python document client")
-        }
-    }
+	if s.usePythonAPI && s.pythonClient == nil {
+		s.logger.Info("Attempting to create default Python document client")
+		config := pyprovider.DefaultConfig()
+		baseClient, err := pyprovider.NewClient(config)
+		if err != nil {
+			s.logger.WithError(err).Warn("Failed to create Python client, disabling Python API")
+			s.usePythonAPI = false
+		} else {
+			s.pythonClient = pyprovider.NewDocumentClient(baseClient)
+			s.logger.Info("Successfully created default Python document client")
+		}
+	}
 
 	return nil
 }
@@ -228,180 +228,175 @@ func (s *DocumentService) processDocumentSync(ctx context.Context, fileID string
 // parseDocument 解析文档内容
 // 优先使用Python API解析，如果不可用或失败则回退到本地解析
 func (s *DocumentService) parseDocument(filePath string) (string, error) {
-    s.logger.WithField("file_path", filePath).Debug("Parsing document")
+	s.logger.WithField("file_path", filePath).Debug("parsing document")
 
-    // 如果启用了Python API且客户端已设置，尝试使用Python解析
-    if s.usePythonAPI && s.pythonClient != nil {
-        s.logger.Debug("Attempting to parse document using Python API")
-        ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
-        defer cancel()
+	// 如果启用了Python API且客户端已设置，尝试使用Python解析
+	if s.usePythonAPI && s.pythonClient != nil {
+		s.logger.Debug("attempting to parse document using Python API")
 
-        // 尝试使用Python API解析文档
-        result, err := s.pythonClient.ParseDocument(ctx, filePath)
-        if err == nil && result != nil {
-            s.logger.Info("Successfully parsed document using Python API")
-            return result.Content, nil
-        }
+		// 创建解析上下文
+		ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+		defer cancel()
 
-        // 如果Python解析失败，记录错误并回退到本地解析
-        s.logger.WithError(err).Warn("Failed to parse document using Python API, falling back to local parser")
-    }
+		// 尝试使用Python客户端解析文档
+		result, err := s.pythonClient.ParseDocument(ctx, filePath)
+		if err != nil {
+			s.logger.WithError(err).Warn("failed to parse document using Python API")
+			// 这里不返回，继续使用本地解析作为回退
+		} else {
+			s.logger.WithField("content_length", len(result.Content)).Info("Python解析成功")
+			return result.Content, nil
+		}
+	}
 
-    // 回退到本地解析逻辑
-    s.logger.Debug("Using local document parser")
+	// 回退到本地解析逻辑
+	s.logger.Debug("falling back to local parser")
 
-    // 首先尝试从存储获取文件
-    fileID := filepath.Base(filePath)
-    // 移除扩展名
-    fileID = strings.TrimSuffix(fileID, filepath.Ext(fileID))
+	// 首先尝试从存储获取文件
+	fileID := filepath.Base(filePath)
+	// 移除扩展名
+	fileID = strings.TrimSuffix(fileID, filepath.Ext(fileID))
 
-    // 尝试获取文件
-    reader, err := s.storage.Get(fileID)
-    if err != nil {
-        s.logger.WithError(err).Debug("Failed to get file directly, trying with path")
-        // 尝试将整个路径作为ID
-        reader, err = s.storage.Get(filePath)
-        if err != nil {
-            return "", fmt.Errorf("failed to get file from storage: %w", err)
-        }
-    }
-    defer reader.Close()
+	// 尝试获取文件
+	reader, err := s.storage.Get(fileID)
+	if err != nil {
+		// 尝试将整个路径作为ID
+		reader, err = s.storage.Get(filePath)
+		if err != nil {
+			return "", fmt.Errorf("failed to read file: %w", err)
+		}
+	}
+	defer reader.Close()
 
-    // 如果设置了解析器，直接使用
-    if s.parser != nil {
-        return s.parseDocumentWithReader(reader, filePath)
-    }
+	// 如果设置了解析器，直接使用
+	if s.parser != nil {
+		return s.parser.ParseReader(reader, filePath)
+	}
 
-    // 否则使用工厂创建解析器
-    parser, err := document.ParserFactory(filePath)
-    if err != nil {
-        return "", fmt.Errorf("failed to create parser: %w", err)
-    }
+	// 否则使用工厂创建解析器
+	parser, err := document.ParserFactory(filePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to create parser: %w", err)
+	}
 
-    // 直接从reader解析文档
-    content, err := parser.ParseReader(reader, filePath)
-    if err != nil {
-        return "", fmt.Errorf("failed to parse document: %w", err)
-    }
+	// 解析文档
+	content, err := parser.ParseReader(reader, filePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse document: %w", err)
+	}
 
-    return content, nil
+	return content, nil
 }
 
 // parseDocumentWithReader 从reader解析文档
 // 优先使用Python API解析，如果不可用或失败则回退到本地解析
 func (s *DocumentService) parseDocumentWithReader(reader io.Reader, fileName string) (string, error) {
-    // 如果启用了Python API且客户端已设置，尝试使用Python解析
-    if s.usePythonAPI && s.pythonClient != nil {
-        s.logger.Debug("Attempting to parse document from reader using Python API")
-        
-        // 需要一个可重复读取的reader，因为如果Python解析失败，我们需要再次读取内容
-        // 这里我们先读取所有内容到内存中
-        content, err := io.ReadAll(reader)
-        if err != nil {
-            return "", fmt.Errorf("failed to read file content: %w", err)
-        }
-        
-        // 为Python API创建一个新的reader
-        pythonReader := strings.NewReader(string(content))
-        
-        ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
-        defer cancel()
-        
-        // 尝试使用Python API解析
-        result, err := s.pythonClient.ParseDocumentWithReader(ctx, pythonReader, fileName)
-        if err == nil && result != nil {
-            s.logger.Info("Successfully parsed document from reader using Python API")
-            return result.Content, nil
-        }
-        
-        // 如果Python解析失败，记录错误并回退到本地解析
-        s.logger.WithError(err).Warn("Failed to parse document from reader using Python API, falling back to local parser")
-        
-        // 为本地解析创建新的reader
-        localReader := strings.NewReader(string(content))
-        
-        // 如果设置了解析器，使用设置的解析器
-        if s.parser != nil {
-            return s.parser.ParseReader(localReader, fileName)
-        }
-        
-        // 否则创建新的解析器
-        parser, err := document.ParserFactory(fileName)
-        if err != nil {
-            return "", fmt.Errorf("failed to create parser: %w", err)
-        }
-        
-        return parser.ParseReader(localReader, fileName)
-    }
-    
-    // 如果没有启用Python API，直接使用本地解析
-    if s.parser != nil {
-        return s.parser.ParseReader(reader, fileName)
-    }
-    
-    // 使用工厂创建解析器
-    parser, err := document.ParserFactory(fileName)
-    if err != nil {
-        return "", fmt.Errorf("failed to create parser: %w", err)
-    }
-    
-    return parser.ParseReader(reader, fileName)
+	// 如果启用了Python API且客户端已设置，尝试使用Python解析
+	if s.usePythonAPI && s.pythonClient != nil {
+		s.logger.Debug("Attempting to parse document from reader using Python API")
+
+		// 需要一个可重复读取的reader，因为如果Python解析失败，我们需要再次读取内容
+		// 这里我们先读取所有内容到内存中
+		content, err := io.ReadAll(reader)
+		if err != nil {
+			return "", fmt.Errorf("failed to read file content: %w", err)
+		}
+
+		// 为Python API创建一个新的reader
+		pythonReader := strings.NewReader(string(content))
+
+		ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+		defer cancel()
+
+		// 尝试使用Python API解析
+		result, err := s.pythonClient.ParseDocumentWithReader(ctx, pythonReader, fileName)
+		if err == nil && result != nil {
+			s.logger.Info("Successfully parsed document from reader using Python API")
+			return result.Content, nil
+		}
+
+		// 如果Python解析失败，记录错误并回退到本地解析
+		s.logger.WithError(err).Warn("Failed to parse document from reader using Python API, falling back to local parser")
+
+		// 为本地解析创建新的reader
+		localReader := strings.NewReader(string(content))
+
+		// 如果设置了解析器，使用设置的解析器
+		if s.parser != nil {
+			return s.parser.ParseReader(localReader, fileName)
+		}
+
+		// 否则创建新的解析器
+		parser, err := document.ParserFactory(fileName)
+		if err != nil {
+			return "", fmt.Errorf("failed to create parser: %w", err)
+		}
+
+		return parser.ParseReader(localReader, fileName)
+	}
+
+	// 如果没有启用Python API，直接使用本地解析
+	if s.parser != nil {
+		return s.parser.ParseReader(reader, fileName)
+	}
+
+	// 使用工厂创建解析器
+	parser, err := document.ParserFactory(fileName)
+	if err != nil {
+		return "", fmt.Errorf("failed to create parser: %w", err)
+	}
+
+	return parser.ParseReader(reader, fileName)
 }
 
 // splitContent 使用python API或本地分块器进行文本分块
 func (s *DocumentService) splitContent(content string) ([]document.Content, error) {
-    // 检查是否使用Python API
-    if s.usePythonAPI && s.pythonClient != nil {
-        s.logger.Debug("Using Python API for text chunking")
-        
-        ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
-        defer cancel()
-        
-        // 生成唯一的文档ID，仅用于分块API调用
-        tempDocID := fmt.Sprintf("temp_%s", uuid.New().String()[:8])
-        
-        // 准备分块选项
-        options := &pyprovider.SplitOptions{
-            ChunkSize:    1000, // 默认块大小
-            ChunkOverlap: 200,  // 默认重叠大小
-            SplitType:    "paragraph", // 默认使用段落分割
-            StoreResult:  false,       // 临时分块不需要存储
-            Metadata:     map[string]any{},
-        }
-        
-        // 调用Python API进行文本分块
-        chunks, _, err := s.pythonClient.SplitText(ctx, content, tempDocID, options)
-        if err != nil {
-            s.logger.WithError(err).Warn("Failed to chunk text using Python API, falling back to local splitter")
-            return s.splitContentLocal(content)
-        }
-        
-        // 转换Python API返回的Content到document.Content
-        result := make([]document.Content, len(chunks))
-        for i, chunk := range chunks {
-            result[i] = document.Content{
-                Text:  chunk.Text,
-                Index: chunk.Index,
-            }
-        }
-        
-        s.logger.WithField("chunk_count", len(chunks)).Debug("Successfully chunked text using Python API")
-        return result, nil
-    }
-    
-    // 如果未启用Python API或客户端为nil，使用本地分块器
-    return s.splitContentLocal(content)
+	if s.usePythonAPI && s.pythonClient != nil {
+		s.logger.Debug("using Python text chunker")
+
+		ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+		defer cancel()
+
+		// 生成一个临时文档ID
+		tempDocID := fmt.Sprintf("temp_%s", uuid.New().String()[:8])
+
+		options := &pyprovider.SplitOptions{
+			ChunkSize:    s.splitter.(*document.PythonSplitter).GetChunkSize(),
+			ChunkOverlap: s.splitter.(*document.PythonSplitter).GetOverlap(),
+			SplitType:    "sentence", 
+			StoreResult:  false,      // 临时分块不需要存储
+		}
+
+		// 调用python API进行文本分块
+		pyContents, _, err := s.pythonClient.SplitText(ctx, content, tempDocID, options)
+		if err != nil {
+			s.logger.WithError(err).Warn("python chunking failed, falling back to local chunking")
+		} else {
+			// 将Python返回的内容转换为本地格式
+			contents := make([]document.Content, len(pyContents))
+			for i, pyContent := range pyContents {
+				contents[i] = document.Content{
+					Text:  pyContent.Text,
+					Index: pyContent.Index,
+				}
+			}
+			return contents, nil
+		}
+	}
+
+	// Use local chunker as fallback
+	return s.splitContentLocal(content)
 }
 
 // splitContentLocal 使用本地分块器进行文本分块
 // 注：此函数将作为回退方案，在迁移全部完成后可以移除
 func (s *DocumentService) splitContentLocal(content string) ([]document.Content, error) {
-    s.logger.Debug("Using local text chunker")
-    segments, err := s.splitter.Split(content)
-    if err != nil {
-        return nil, fmt.Errorf("failed to split content: %w", err)
-    }
-    return segments, nil
+	s.logger.Debug("Using local text chunker")
+	segments, err := s.splitter.Split(content)
+	if err != nil {
+		return nil, fmt.Errorf("failed to split content: %w", err)
+	}
+	return segments, nil
 }
 
 // processBatches 批量处理文本段落

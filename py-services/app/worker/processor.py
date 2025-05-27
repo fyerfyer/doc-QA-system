@@ -1,510 +1,397 @@
 import os
 import time
-import traceback
+from typing import Dict, Any, Optional, Tuple
 
 from app.models.model import (
-    Task, TaskType, TaskStatus,
-    DocumentParseResult,TextChunkResult,
-    ChunkInfo, VectorizeResult,
-    VectorInfo,ProcessCompleteResult
+    Task, TaskType, DocumentParseResult, 
+    TextChunkResult, VectorizeResult,
+    ProcessCompletePayload, ProcessCompleteResult,VectorInfo
 )
 
-from app.parsers.factory import create_parser, detect_content_type
-from app.chunkers.splitter import split_text
+# 导入新的文档处理模块
+from app.document_processing.factory import (
+    create_parser, create_chunker, detect_content_type, 
+    process_file, get_file_from_minio
+)
 from app.embedders.factory import create_embedder, get_default_embedder
-from app.utils.utils import logger, count_words, count_chars
-from app.worker.tasks import update_task_status
-from app.embedders.base import BaseEmbedder
-from app.worker.tasks import get_task_from_redis
+from app.utils.utils import logger, count_words, count_chars, retry
+from app.utils.minio_client import get_minio_client
+
+minio_client = get_minio_client()
 
 class DocumentProcessor:
-    """文档处理器，负责执行文档的解析、分块和向量化任务"""
-
+    """文档处理器，处理文档的解析、分块和向量化等任务"""
+    
     def __init__(self):
-        """初始化文档处理器"""
-        self.logger = logger
-
-        # 确保环境变量已配置
-        self.dashscope_api_key = os.getenv("DASHSCOPE_API_KEY", "")
-        self.embedding_model = os.getenv("EMBEDDING_MODEL", "text-embedding-v3")
-        self.callback_url = os.getenv("CALLBACK_URL", "http://localhost:8080/api/tasks/callback")
-
-        # 设置代理配置（用于HuggingFace）
-        self.proxies = {
-            "http": "http://127.0.0.1:7897",
-            "https": "http://127.0.0.1:7897"
-        }
-
-        # 创建嵌入模型实例
-        self._initialize_embedding_client()
-
-        self.logger.info("Document processor initialized")
-
-    def _initialize_embedding_client(self):
-        """初始化嵌入模型客户端"""
-        # 尝试使用通义千问API（首选）
-        if self.dashscope_api_key:
-            try:
-                self.embedder = create_embedder(
-                    "tongyi",
-                    api_key=self.dashscope_api_key,
-                    model_name=self.embedding_model
-                )
-                self.logger.info(f"Successfully initialized Tongyi embedder: {self.embedder.get_model_name()}")
-                return
-            except Exception as e:
-                self.logger.warning(f"Failed to initialize Tongyi embedder: {str(e)}, falling back to default embedder")
-        else:
-            self.logger.warning("No DashScope API key found, falling back to default embedder")
-
-        # 使用默认嵌入器（回退）
+        """初始化处理器，加载嵌入模型"""
+        self.embedder = None
+        self._load_embedder()
+        
+    def _load_embedder(self):
+        """加载默认的嵌入模型"""
         try:
             self.embedder = get_default_embedder()
-            self.logger.info(f"Successfully initialized default embedder: {self.embedder.get_model_name()}")
-            return
+            logger.info(f"Loaded default embedder: {self.embedder.get_model_name()}")
         except Exception as e:
-            self.logger.warning(f"Failed to initialize default embedder: {str(e)}, using fallback embedder")
-
-        # 零向量嵌入器（最后回退）
-        self.logger.warning("Using zero-vector fallback embedder (for testing/development only)")
-        self.embedder = self._create_fallback_embedder()
-        self.logger.info("Fallback embedder initialized")
-
-    def _create_fallback_embedder(self):
-        """创建简单的回退嵌入器（用于测试或错误情况）"""
-
-        class FallbackEmbedder(BaseEmbedder):
-            def __init__(self):
-                super().__init__(model_name="fallback-embedder", dimension=1536)
-                self.logger = logger
-
-            def embed(self, text):
-                # 生成固定维度的零向量
-                self.logger.debug(f"Using fallback embedder to embed text: {text[:50]}...")
-                return [0.0] * 1536
-
-            def embed_batch(self, texts):
-                # 为每个文本生成零向量
-                self.logger.debug(f"Using fallback embedder to embed batch of {len(texts)} texts")
-                return [[0.0] * 1536 for _ in texts]
-
-            def get_model_name(self):
-                return "fallback-embedder"
-
-        return FallbackEmbedder()
-
-    def process_task(self, task: Task) -> bool:
+            logger.error(f"Failed to load default embedder: {str(e)}")
+    
+    def get_embedder(self, model_name: Optional[str] = None):
         """
-        处理任务入口点
+        获取嵌入器实例
+        
+        参数:
+            model_name: 模型名称，如果为None则使用默认模型
+            
+        返回:
+            BaseEmbedder: 嵌入器实例
+        """
+        if model_name and model_name != "default":
+            try:
+                logger.info(f"Creating embedder with model: {model_name}")
+                return create_embedder(model_name)
+            except Exception as e:
+                logger.error(f"Failed to create embedder with model {model_name}: {str(e)}")
+                logger.info("Falling back to default embedder")
+                
+        # 如果没有预加载默认嵌入器或加载失败，尝试重新加载
+        if not self.embedder:
+            self._load_embedder()
+            
+        return self.embedder
+    
+    @retry(max_retries=3, delay=2)
+    def process_document(self, task: Task) -> Tuple[bool, Dict[str, Any]]:
+        """
+        处理完整的文档处理任务(解析+分块+向量化)
+        
+        参数:
+            task: 任务对象
+            
+        返回:
+            Tuple[bool, Dict[str, Any]]: (成功与否, 结果字典)
+        """
+        logger.info(f"Processing complete document task: {task.id} for document {task.document_id}")
+        
+        try:
+            if task.type != TaskType.PROCESS_COMPLETE:
+                raise ValueError(f"Invalid task type: {task.type}, expected: {TaskType.PROCESS_COMPLETE}")
+                
+            # 解析任务参数
+            payload = ProcessCompletePayload(**task.payload)
+            
+            # 完整处理：解析 + 分块 + 向量化
+            logger.info(f"Starting complete processing for document {task.document_id}, file: {payload.file_path}")
+            
+            # 使用新的process_file函数一次性处理文档
+            content, chunks, doc_metadata = process_file(
+                file_path=payload.file_path,
+                chunk_size=payload.chunk_size,
+                chunk_overlap=payload.overlap,
+                split_type=payload.split_type,
+                metadata=payload.metadata
+            )
+            
+            # 检查处理结果
+            if not content:
+                raise ValueError(f"Failed to extract content from document: {payload.file_path}")
+                
+            if not chunks:
+                raise ValueError(f"Failed to chunk content for document: {payload.file_path}")
+            
+            # 向量化所有块
+            embedder = self.get_embedder(payload.model)
+            logger.info(f"Vectorizing {len(chunks)} chunks using model: {embedder.get_model_name()}")
+            
+            # 准备要嵌入的文本列表
+            texts = [chunk["text"] for chunk in chunks]
+            
+            # 批量嵌入
+            start_time = time.time()
+            embeddings = embedder.embed_batch(texts)
+            embed_time = time.time() - start_time
+            
+            logger.info(f"Vectorization completed in {embed_time:.2f}s")
+            
+            # 创建向量结果
+            vectors = []
+            for i, embedding in enumerate(embeddings):
+                vectors.append(VectorInfo(
+                    chunk_index=chunks[i]["index"],
+                    vector=embedding
+                ))
+            
+            # 整合结果
+            result = ProcessCompleteResult(
+                document_id=task.document_id,
+                chunk_count=len(chunks),
+                vector_count=len(vectors),
+                dimension=len(vectors[0].vector) if vectors else 0,
+                parse_status="completed",
+                chunk_status="completed",
+                vector_status="completed",
+                vectors=vectors
+            )
+            
+            return True, result.__dict__
+            
+        except Exception as e:
+            logger.error(f"Error processing complete document: {str(e)}")
+            return False, {"error": str(e)}
+    
+    @retry(max_retries=3, delay=2)
+    def parse_document(self, task: Task) -> Tuple[bool, Dict[str, Any]]:
+        """
+        解析文档内容
+        
+        参数:
+            task: 任务对象
+            
+        返回:
+            Tuple[bool, Dict[str, Any]]: (成功与否, 结果字典)
+        """
+        logger.info(f"Processing document parse task: {task.id} for document {task.document_id}")
+        
+        try:
+            # 检查任务类型
+            if task.type != TaskType.DOCUMENT_PARSE:
+                raise ValueError(f"Invalid task type: {task.type}, expected: {TaskType.DOCUMENT_PARSE}")
+            
+            # 获取文件路径和文件类型
+            file_path = task.payload.get("file_path")
+            if not file_path:
+                raise ValueError("Missing file_path in task payload")
+                
+            file_name = task.payload.get("file_name", os.path.basename(file_path))
+            file_type = task.payload.get("file_type", "")
+            
+            # 处理文件
+            local_temp_path = None
+            is_temp = False
+            
+            # 检查文件是否存在
+            if not os.path.exists(file_path):
+                # 尝试从MinIO下载
+                local_temp_path, is_temp = get_file_from_minio(file_path)
+                if is_temp:
+                    file_path = local_temp_path
+                else:
+                    raise ValueError(f"File not found: {file_path}")
+            
+            try:
+                # 检测文件类型
+                mime_type = detect_content_type(file_path)
+                
+                # 获取文件扩展名
+                ext = os.path.splitext(file_name)[1][1:] if '.' in file_name else ""
+                
+                # 创建并使用解析器
+                parser = create_parser(file_path, mime_type, ext)
+                content = parser.parse()
+                
+                # 提取标题和元数据
+                title = parser.extract_title(content, file_name)
+                meta = parser.get_metadata()
+                
+                # 添加或更新元数据
+                if isinstance(meta, dict):
+                    # 添加用户提供的元数据
+                    user_metadata = task.payload.get("metadata", {})
+                    if user_metadata:
+                        meta.update(user_metadata)
+                        
+                    # 确保包含基本统计信息
+                    if 'words' not in meta:
+                        meta['words'] = count_words(content)
+                    if 'chars' not in meta:
+                        meta['chars'] = count_chars(content)
+                    if 'filename' not in meta:
+                        meta['filename'] = file_name
+                else:
+                    meta = {
+                        'filename': file_name,
+                        'words': count_words(content),
+                        'chars': count_chars(content),
+                        **task.payload.get("metadata", {})
+                    }
+                
+                # 创建解析结果
+                result = DocumentParseResult(
+                    content=content,
+                    document_id=task.document_id,
+                    title=title,
+                    meta=meta,
+                    pages=meta.get('page_count', 1) if isinstance(meta, dict) else 1,
+                    words=meta.get('words', count_words(content)),
+                    chars=meta.get('chars', count_chars(content))
+                )
+                
+                return True, result.__dict__
+            
+            finally:
+                # 清理临时文件
+                if is_temp and local_temp_path and os.path.exists(local_temp_path):
+                    try:
+                        os.remove(local_temp_path)
+                    except Exception as e:
+                        logger.warning(f"Failed to remove temporary file {local_temp_path}: {str(e)}")
+                
+        except Exception as e:
+            logger.error(f"Error parsing document: {str(e)}")
+            return False, {"error": str(e)}
+    
+    @retry(max_retries=3, delay=2)
+    def chunk_text(self, task: Task) -> Tuple[bool, Dict[str, Any]]:
+        """
+        将文本分块
+        
+        参数:
+            task: 任务对象
+            
+        返回:
+            Tuple[bool, Dict[str, Any]]: (成功与否, 结果字典)
+        """
+        logger.info(f"Processing text chunking task: {task.id} for document {task.document_id}")
+        
+        try:
+            # 检查任务类型
+            if task.type != TaskType.TEXT_CHUNK:
+                raise ValueError(f"Invalid task type: {task.type}, expected: {TaskType.TEXT_CHUNK}")
+            
+            # 获取分块参数
+            content = task.payload.get("content")
+            if not content:
+                raise ValueError("Missing content in task payload")
+                
+            document_id = task.payload.get("document_id")
+            chunk_size = task.payload.get("chunk_size", 1000)
+            chunk_overlap = task.payload.get("overlap", 200)
+            split_type = task.payload.get("split_type", "paragraph")
+            
+            # 设置基本元数据
+            metadata = {"document_id": document_id}
+            
+            # 创建分块器并执行分块
+            chunker = create_chunker(chunk_size, chunk_overlap, split_type)
+            chunks = chunker.chunk_text(content, metadata)
+            
+            # 转换为预期的返回格式
+            chunk_objects = []
+            for i, chunk in enumerate(chunks):
+                chunk_objects.append({
+                    "text": chunk["text"],
+                    "index": chunk["index"] if "index" in chunk else i
+                })
+                
+            # 创建分块结果
+            result = TextChunkResult(
+                document_id=task.document_id,
+                chunks=chunk_objects,
+                chunk_count=len(chunk_objects)
+            )
+            
+            return True, result.__dict__
+            
+        except Exception as e:
+            logger.error(f"Error chunking text: {str(e)}")
+            return False, {"error": str(e)}
+    
+    @retry(max_retries=3, delay=2)
+    def vectorize_text(self, task: Task) -> Tuple[bool, Dict[str, Any]]:
+        """
+        向量化文本块
+        
+        参数:
+            task: 任务对象
+            
+        返回:
+            Tuple[bool, Dict[str, Any]]: (成功与否, 结果字典)
+        """
+        logger.info(f"Processing vectorization task: {task.id} for document {task.document_id}")
+        
+        try:
+            # 检查任务类型
+            if task.type != TaskType.VECTORIZE:
+                raise ValueError(f"Invalid task type: {task.type}, expected: {TaskType.VECTORIZE}")
+            
+            # 获取向量化参数
+            chunks = task.payload.get("chunks")
+            if not chunks:
+                raise ValueError("Missing chunks in task payload")
+                
+            model = task.payload.get("model", "default")
+            
+            # 获取嵌入器
+            embedder = self.get_embedder(model)
+            
+            # 提取文本
+            texts = []
+            for chunk in chunks:
+                if isinstance(chunk, dict) and "text" in chunk:
+                    texts.append(chunk["text"])
+                else:
+                    raise ValueError("Invalid chunk format, missing 'text' field")
+            
+            # 批量嵌入
+            logger.info(f"Vectorizing {len(texts)} chunks using model: {embedder.get_model_name()}")
+            start_time = time.time()
+            embeddings = embedder.embed_batch(texts)
+            embed_time = time.time() - start_time
+            logger.info(f"Vectorization completed in {embed_time:.2f}s")
+            
+            # 创建向量结果
+            vectors = []
+            for i, embedding in enumerate(embeddings):
+                chunk_index = chunks[i].get("index", i)
+                if isinstance(chunk_index, dict) and "index" in chunk_index:
+                    chunk_index = chunk_index["index"]
+                    
+                vectors.append(VectorInfo(
+                    chunk_index=chunk_index,
+                    vector=embedding
+                ))
+            
+            result = VectorizeResult(
+                document_id=task.document_id,
+                vectors=vectors,
+                vector_count=len(vectors),
+                model=embedder.get_model_name(),
+                dimension=len(vectors[0].vector) if vectors else 0
+            )
+            
+            return True, result.__dict__
+            
+        except Exception as e:
+            logger.error(f"Error vectorizing text: {str(e)}")
+            return False, {"error": str(e)}
+
+    def process_task(self, task: Task) -> Tuple[bool, Dict[str, Any]]:
+        """
+        处理任务，根据任务类型调用相应的处理方法
 
         参数:
             task: 任务对象
 
         返回:
-            bool: 处理成功返回True，失败返回False
+            Tuple[bool, Dict[str, Any]]: (成功与否, 结果字典)
         """
-        if not task or not task.type:
-            self.logger.error("Invalid task object received")
-            return False
-
-        self.logger.info(f"Processing task: {task.id}, type: {task.type}, document_id: {task.document_id}")
-
-        # 根据任务类型调用适当的处理函数
-        try:
-            if task.type == TaskType.DOCUMENT_PARSE:
-                return self.process_parse_document(task)
-            elif task.type == TaskType.TEXT_CHUNK:
-                return self.process_chunk_text(task)
-            elif task.type == TaskType.VECTORIZE:
-                return self.process_vectorize_text(task)
-            elif task.type == TaskType.PROCESS_COMPLETE:
-                return self.process_complete(task)
-            else:
-                self.logger.error(f"Unsupported task type: {task.type}")
-                update_task_status(task, TaskStatus.FAILED, error=f"Unsupported task type: {task.type}")
-                return False
-        except Exception as e:
-            error_msg = f"Error processing task {task.id}: {str(e)}\n{traceback.format_exc()}"
-            self.logger.error(error_msg)
-            update_task_status(task, TaskStatus.FAILED, error=error_msg)
-            return False
-
-    def process_parse_document(self, task: Task) -> bool:
-        """
-        处理文档解析任务
-
-        参数:
-            task: 文档解析任务
-
-        返回:
-            bool: 处理成功返回True，失败返回False
-        """
-        self.logger.info(f"Parsing document for task: {task.id}")
-
-        # 更新任务状态为处理中
-        update_task_status(task, TaskStatus.PROCESSING)
-
-        try:
-            # 解析任务载荷
-            if not isinstance(task.payload, dict):
-                raise ValueError("Task payload is not a dictionary")
-            else:
-                payload = task.payload
-
-            # 验证必要字段
-            if 'file_path' not in payload:
-                raise ValueError("Missing required field 'file_path' in payload")
-
-            file_path = payload.get('file_path')
-            file_name = payload.get('file_name', os.path.basename(file_path))
-
-            self.logger.info(f"Processing document: {file_path}")
-
-            # 检测文件类型
-            mime_type = detect_content_type(file_path)
-
-            # 创建适当的解析器
-            parser = create_parser(file_path, mime_type)
-
-            # 解析文档
-            start_time = time.time()
-            content = parser.parse(file_path)
-
-            # 提取文档标题
-            title = parser.extract_title(content, file_name) if hasattr(parser, 'extract_title') else file_name
-
-            # 获取文档元数据
-            meta = parser.get_metadata(file_path) if hasattr(parser, 'get_metadata') else {}
-
-            # 构建结果
-            result = DocumentParseResult(
-                content=content,
-                title=title,
-                meta=meta,
-                pages=meta.get('page_count', 1) if isinstance(meta, dict) else 1,
-                words=count_words(content),
-                chars=count_chars(content)
-            )
-
-            elapsed = time.time() - start_time
-            self.logger.info(f"Document parsing completed in {elapsed:.2f}s. Text length: {len(content)} chars")
-
-            # 更新任务状态为已完成，包括结果
-            update_task_status(task, TaskStatus.COMPLETED, result=result.__dict__)
-            return True
-
-        except Exception as e:
-            error_msg = f"Document parse failed: {str(e)}\n{traceback.format_exc()}"
-            self.logger.error(error_msg)
-            update_task_status(task, TaskStatus.FAILED, error=error_msg)
-            return False
-
-    def process_chunk_text(self, task: Task) -> bool:
-        """
-        处理文本分块任务
-
-        参数:
-            task: 文本分块任务
-
-        返回:
-            bool: 处理成功返回True，失败返回False
-        """
-        self.logger.info(f"Chunking text for task: {task.id}")
-
-        # 更新任务状态为处理中
-        update_task_status(task, TaskStatus.PROCESSING)
-
-        try:
-            # 解析任务载荷
-            if not isinstance(task.payload, dict):
-                raise ValueError("Task payload is not a dictionary")
-            else:
-                payload = task.payload
-
-            # 验证必要字段
-            if 'content' not in payload:
-                raise ValueError("Missing required field 'content' in payload")
-            if 'document_id' not in payload:
-                raise ValueError("Missing required field 'document_id' in payload")
-
-            document_id = payload.get('document_id')
-            content = payload.get('content')
-            chunk_size = int(payload.get('chunk_size', 1000))
-            overlap = int(payload.get('overlap', 200))
-            split_type = payload.get('split_type', 'paragraph')
-
-            self.logger.info(f"Chunking text for document {document_id}: {len(content)} chars, type: {split_type}")
-
-            # 执行文本分块
-            start_time = time.time()
-            chunks = split_text(
-                text=content,
-                chunk_size=chunk_size,
-                chunk_overlap=overlap,
-                split_type=split_type
-            )
-
-            # 构建块信息列表
-            chunk_infos = []
-            for i, chunk in enumerate(chunks):
-                chunk_infos.append(ChunkInfo(
-                    text=chunk["text"],
-                    index=chunk["index"]
-                ))
-
-            # 构建结果
-            result = TextChunkResult(
-                document_id=document_id,
-                chunks=chunk_infos,
-                chunk_count=len(chunk_infos)
-            )
-
-            elapsed = time.time() - start_time
-            self.logger.info(f"Text chunking completed in {elapsed:.2f}s. Generated {len(chunk_infos)} chunks")
-
-            # 更新任务状态为已完成，包括结果
-            update_task_status(task, TaskStatus.COMPLETED, result=result.__dict__)
-            return True
-
-        except Exception as e:
-            error_msg = f"Text chunking failed: {str(e)}\n{traceback.format_exc()}"
-            self.logger.error(error_msg)
-            update_task_status(task, TaskStatus.FAILED, error=error_msg)
-            return False
-
-    def process_vectorize_text(self, task: Task) -> bool:
-        """
-        处理文本向量化任务
-
-        参数:
-            task: 向量化任务
-
-        返回:
-            bool: 处理成功返回True，失败返回False
-        """
-        self.logger.info(f"Vectorizing text for task: {task.id}")
-
-        # 更新任务状态为处理中
-        update_task_status(task, TaskStatus.PROCESSING)
-
-        try:
-            # 解析任务载荷
-            if not isinstance(task.payload, dict):
-                raise ValueError("Task payload is not a dictionary")
-            else:
-                payload = task.payload
-
-            # 验证必要字段
-            if 'chunks' not in payload:
-                raise ValueError("Missing required field 'chunks' in payload")
-            if 'document_id' not in payload:
-                raise ValueError("Missing required field 'document_id' in payload")
-
-            document_id = payload.get('document_id')
-            chunks = payload.get('chunks', [])
-            model = payload.get('model', self.embedding_model)
-
-            # 显式处理default模型
-            if model.lower() == "default":
-                logger.info("Using default embedder as specified by 'default' model name")
-                embedder = get_default_embedder()
-            else:
-                embedder = create_embedder(model)
-
-            if not chunks:
-                raise ValueError("Empty chunks list in payload")
-
-            self.logger.info(f"Vectorizing {len(chunks)} chunks for document {document_id}")
-
-            # 提取文本
-            texts = []
-            for chunk in chunks:
-                if isinstance(chunk, dict):
-                    texts.append(chunk.get("text", ""))
-                else:
-                    texts.append(chunk.text)
-
-            # 批量生成向量
-            start_time = time.time()
-            vectors = embedder.embed_batch(texts)
-
-            # 构建向量信息
-            vector_infos = []
-            dimension = len(vectors[0]) if vectors and vectors[0] else 0
-
-            for i, vector in enumerate(vectors):
-                chunk_idx = chunks[i].get('index', i) if isinstance(chunks[i], dict) else chunks[i].index
-                vector_infos.append(VectorInfo(
-                    chunk_index=chunk_idx,
-                    vector=vector
-                ))
-
-            # 构建结果
-            result = VectorizeResult(
-                document_id=document_id,
-                vectors=vector_infos,
-                vector_count=len(vector_infos),
-                model=model,
-                dimension=dimension
-            )
-
-            elapsed = time.time() - start_time
-            self.logger.info(f"Vectorization completed in {elapsed:.2f}s. Generated {len(vector_infos)} vectors with dimension {dimension}")
-
-            # 更新任务状态为已完成，包括结果
-            update_task_status(task, TaskStatus.COMPLETED, result=result.__dict__)
-            return True
-
-        except Exception as e:
-            error_msg = f"Text vectorization failed: {str(e)}\n{traceback.format_exc()}"
-            self.logger.error(error_msg)
-            update_task_status(task, TaskStatus.FAILED, error=error_msg)
-            return False
-
-    def process_complete(self, task: Task) -> bool:
-        """
-        处理完整文档处理流程
-
-        参数:
-            task: 完整处理任务
-
-        返回:
-            bool: 处理成功返回True，失败返回False
-        """
-        self.logger.info(f"Processing complete document flow for task: {task.id}")
-
-        # 更新任务状态为处理中
-        update_task_status(task, TaskStatus.PROCESSING)
-
-        try:
-            # 解析任务载荷
-            if not isinstance(task.payload, dict):
-                raise ValueError("Task payload is not a dictionary")
-            else:
-                payload = task.payload
-
-            # 验证必要字段
-            if 'document_id' not in payload:
-                raise ValueError("Missing required field 'document_id' in payload")
-            if 'file_path' not in payload:
-                raise ValueError("Missing required field 'file_path' in payload")
-
-            document_id = payload.get('document_id')
-            file_path = payload.get('file_path')
-            file_name = payload.get('file_name', os.path.basename(file_path))
-            chunk_size = int(payload.get('chunk_size', 1000))
-            overlap = int(payload.get('overlap', 200))
-            split_type = payload.get('split_type', 'paragraph')
-            model = payload.get('model', self.embedding_model)
-
-            self.logger.info(f"Starting complete processing for document: {document_id}, file: {file_path}")
-
-            # 1. 解析文档
-            start_time = time.time()
-            self.logger.info("Step 1: Parsing document")
-            mime_type = detect_content_type(file_path)
-            parser = create_parser(file_path, mime_type)
-            content = parser.parse(file_path)
-
-            title = parser.extract_title(content, file_name) if hasattr(parser, 'extract_title') else file_name
-            meta = parser.get_metadata(file_path) if hasattr(parser, 'get_metadata') else {}
-
-            parse_elapsed = time.time() - start_time
-            self.logger.info(f"Document parsing completed in {parse_elapsed:.2f}s. Text length: {len(content)} chars")
-            parse_status = "completed"
-
-            # 2. 分块文本
-            chunk_start_time = time.time()
-            self.logger.info("Step 2: Chunking text")
-            chunks = split_text(
-                text=content,
-                chunk_size=chunk_size,
-                chunk_overlap=overlap,
-                split_type=split_type
-            )
-
-            chunk_infos = []
-            for i, chunk in enumerate(chunks):
-                chunk_infos.append(ChunkInfo(
-                    text=chunk["text"],
-                    index=chunk["index"]
-                ))
-
-            chunk_elapsed = time.time() - chunk_start_time
-            self.logger.info(f"Text chunking completed in {chunk_elapsed:.2f}s. Generated {len(chunk_infos)} chunks")
-            chunk_status = "completed"
-
-            # 3. 向量化文本
-            if not chunk_infos:
-                vector_status = "skipped"
-                vector_infos = []
-                dimension = 0
-                self.logger.warning("No chunks generated, skipping vectorization")
-            else:
-                vector_status = "completed"
-                vector_start_time = time.time()
-                self.logger.info("Step 3: Vectorizing text")
-
-                # 提取文本并向量化
-                texts = [chunk.text for chunk in chunk_infos]
-                vectors = self.embedder.embed_batch(texts)
-
-                # 构建向量信息
-                vector_infos = []
-                dimension = len(vectors[0]) if vectors and vectors[0] else 0
-
-                for i, vector in enumerate(vectors):
-                    vector_infos.append(VectorInfo(
-                        chunk_index=chunk_infos[i].index,
-                        vector=vector
-                    ))
-
-                vector_elapsed = time.time() - vector_start_time
-                self.logger.info(f"Vectorization completed in {vector_elapsed:.2f}s. Generated {len(vector_infos)} vectors")
-
-            # 构建结果
-            total_elapsed = time.time() - start_time
-            result = ProcessCompleteResult(
-                document_id=document_id,
-                chunk_count=len(chunk_infos),
-                vector_count=len(vector_infos),
-                dimension=dimension,
-                parse_status=parse_status,
-                chunk_status=chunk_status,
-                vector_status=vector_status,
-                vectors=vector_infos
-            )
-
-            self.logger.info(f"Complete document processing finished in {total_elapsed:.2f}s")
-
-            # 更新任务状态为已完成，包括结果
-            update_task_status(task, TaskStatus.COMPLETED, result=result.__dict__)
-            return True
-
-        except Exception as e:
-            error_msg = f"Complete document processing failed: {str(e)}\n{traceback.format_exc()}"
-            self.logger.error(error_msg)
-            update_task_status(task, TaskStatus.FAILED, error=error_msg)
-            return False
-
-# 创建处理器单例
+        logger.info(f"Processing task {task.id} of type {task.type}")
+        
+        if not task.type:
+            logger.error(f"Task {task.id} has no type")
+            return False, {"error": "Task has no type"}
+        
+        # 根据任务类型调用相应的处理方法
+        if task.type == TaskType.DOCUMENT_PARSE:
+            return self.parse_document(task)
+        elif task.type == TaskType.TEXT_CHUNK:
+            return self.chunk_text(task)
+        elif task.type == TaskType.VECTORIZE:
+            return self.vectorize_text(task)
+        elif task.type == TaskType.PROCESS_COMPLETE:
+            return self.process_document(task)
+        else:
+            logger.error(f"Unknown task type: {task.type}")
+            return False, {"error": f"Unknown task type: {task.type}"}
+
+# 创建处理器实例
 document_processor = DocumentProcessor()
-
-def process_task(task_id: str) -> bool:
-    """
-    处理任务的入口函数
-
-    参数:
-        task_id: 任务ID
-
-    返回:
-        bool: 处理成功返回True，失败返回False
-    """
-
-    # 获取任务信息
-    task = get_task_from_redis(task_id)
-    if not task:
-        logger.error(f"Task {task_id} not found")
-        return False
-
-    return document_processor.process_task(task)

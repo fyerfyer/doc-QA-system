@@ -6,7 +6,8 @@ import time
 import tempfile
 from typing import Optional
 
-from app.parsers.factory import create_parser, detect_content_type
+# 导入新的文档处理模块
+from app.document_processing.factory import create_parser, detect_content_type, get_file_from_minio
 from app.utils.minio_client import get_minio_client
 from app.utils.utils import logger, count_words, count_chars
 from app.models.model import Task, TaskType, TaskStatus, DocumentParseResult
@@ -24,7 +25,7 @@ async def parse_document(
     file_path: Optional[str] = Form(None),
     document_id: str = Form(...),
     store_result: bool = Form(True),
-    original_filename: Optional[str] = Form(None)  # Add this parameter
+    original_filename: Optional[str] = Form(None)
 ):
     """
     解析文档内容
@@ -39,129 +40,142 @@ async def parse_document(
     - store_result: 是否存储解析结果
     """
     try:
+        logger.info(f"Parse request received - document_id: {document_id}, file present: {file is not None}, file_path: {file_path}")
+        
         # 验证参数
         if not file and not file_path:
             raise HTTPException(status_code=400, detail="Either file or file_path must be provided")
         
         start_time = time.time()
         task_id = None
+        local_temp_path = None
+        is_temp = False
         
         # 处理上传文件
         if file:
             # 保存上传的文件到临时目录，然后解析
             # 确保保留原始文件扩展名
             orig_filename = file.filename
+            logger.info(f"Processing uploaded file: {orig_filename}, content_type: {file.content_type}")
             file_ext = os.path.splitext(orig_filename)[1] if orig_filename else ".txt"
             
-            with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as temp_file:
-                temp_file_path = temp_file.name
-                content = await file.read()
-                temp_file.write(content)
+            logger.info(f"Using file extension: {file_ext}")
             
-            try:
-                # 检测文件类型
-                mime_type = detect_content_type(temp_file_path)
-                
-                # 创建并使用解析器
-                parser = create_parser(temp_file_path, mime_type)
-                content = parser.parse(temp_file_path)
-                
-                # 提取标题和元数据
-                title = parser.extract_title(content, file.filename)
-                meta = parser.get_metadata(temp_file_path)
-                
-            finally:
-                # 删除临时文件
-                if os.path.exists(temp_file_path):
-                    os.remove(temp_file_path)
+            with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as temp_file:
+                local_temp_path = temp_file.name
+                logger.info(f"Created temporary file: {local_temp_path}")
+                content = await file.read()
+                logger.info(f"Read {len(content)} bytes from uploaded file")
+                temp_file.write(content)
+                temp_file.flush()
+                os.fsync(temp_file.fileno())
+                logger.info(f"Wrote content to temporary file, size: {os.path.getsize(local_temp_path)}")
+            
+            file_path = local_temp_path
+            is_temp = True
+            filename = orig_filename
         else:
-            # 使用提供的文件路径解析
-            try:
-                # 检查文件是否存在
-                file_exists = False
-                
-                # 如果是Windows风格的绝对路径，只检查本地文件系统
-                is_windows_path = file_path and (file_path.startswith('C:') or file_path.startswith('D:') or ':\\' in file_path)
-                
-                if not is_windows_path:
-                    # 尝试在MinIO中查找
-                    try:
-                        if minio_client.file_exists(file_path):
-                            file_exists = True
-                    except Exception as e:
-                        logger.warning(f"Failed to check file in MinIO: {str(e)}")
-                
-                # 尝试在本地查找
-                if not file_exists and os.path.exists(file_path):
-                    file_exists = True
-                
-                if not file_exists:
+            # 使用提供的文件路径
+            # 检查文件是否存在于MinIO或本地
+            if not os.path.exists(file_path):
+                # 尝试从MinIO下载
+                local_temp_path, is_temp = get_file_from_minio(file_path)
+                if is_temp:
+                    file_path = local_temp_path
+                    logger.info(f"Downloaded file from MinIO to {local_temp_path}")
+                elif not os.path.exists(file_path):
                     raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
-                
-                # 获取用于解析器检测的文件名 - 如果提供了original_filename，则使用它
-                filename = original_filename or os.path.basename(file_path)
-                
-                # 使用原始文件名中的扩展名进行解析器选择
-                ext = os.path.splitext(filename)[1][1:] if filename and '.' in filename else ""
-                
-                # 检测文件类型
-                mime_type = detect_content_type(file_path)
-                
-                # 创建并使用解析器
-                parser = create_parser(file_path, mime_type, ext)  # Pass the extension as fallback
-                content = parser.parse(file_path)
-                
-                # 提取标题和元数据
-                title = parser.extract_title(content, filename)
-                meta = parser.get_metadata(file_path)
-                
-            except FileNotFoundError:
-                raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
+            
+            # 获取用于解析器检测的文件名
+            filename = original_filename or os.path.basename(file_path)
         
-        # 创建解析结果
-        result = DocumentParseResult(
-            content=content,
-            document_id=document_id,
-            title=title,
-            meta=meta,
-            pages=meta.get('page_count', 1) if isinstance(meta, dict) else 1,
-            words=count_words(content),
-            chars=count_chars(content)
-        )
-        
-        # 存储解析结果（如果需要）
-        if store_result:
-            # 创建一个任务对象
-            task_id = f"parse_{document_id}_{uuid.uuid4().hex[:8]}"
-            task = Task(
-                id=task_id,
-                type=TaskType.DOCUMENT_PARSE,
+        try:
+            # 检测文件类型 
+            mime_type = detect_content_type(file_path)
+            logger.info(f"Detected MIME type: {mime_type}")
+            
+            # 获取文件扩展名
+            ext = os.path.splitext(filename)[1][1:] if filename and '.' in filename else ""
+            
+            # 创建并使用LlamaIndex-based解析器
+            parser = create_parser(file_path, mime_type, ext)
+            logger.info(f"Created parser: {type(parser).__name__}")
+            
+            # 解析文档
+            content = parser.parse()
+            
+            # 提取标题和元数据
+            title = parser.extract_title(content, filename)
+            meta = parser.get_metadata()
+            
+            # 添加一些基本统计信息（如果元数据中不存在）
+            if isinstance(meta, dict):
+                if 'words' not in meta:
+                    meta['words'] = count_words(content)
+                if 'chars' not in meta:
+                    meta['chars'] = count_chars(content)
+                if 'filename' not in meta:
+                    meta['filename'] = filename
+            else:
+                meta = {
+                    'filename': filename,
+                    'words': count_words(content),
+                    'chars': count_chars(content)
+                }
+            
+            # 创建解析结果
+            result = DocumentParseResult(
+                content=content,
                 document_id=document_id,
-                status=TaskStatus.COMPLETED,
-                result=result.__dict__
+                title=title,
+                meta=meta,
+                pages=meta.get('page_count', 1) if isinstance(meta, dict) else 1,
+                words=meta.get('words', count_words(content)),
+                chars=meta.get('chars', count_chars(content))
             )
             
-            # 保存到Redis
-            redis_client = get_redis_client()
-            redis_client.set(f"task:{task_id}", task.to_json())
-            redis_client.set(f"parse_result:{document_id}", json.dumps(result.__dict__))
+            # 存储解析结果（如果需要）
+            if store_result:
+                # 创建一个任务对象
+                task_id = f"parse_{document_id}_{uuid.uuid4().hex[:8]}"
+                task = Task(
+                    id=task_id,
+                    type=TaskType.DOCUMENT_PARSE,
+                    document_id=document_id,
+                    status=TaskStatus.COMPLETED,
+                    result=result.__dict__
+                )
+                
+                # 保存到Redis
+                redis_client = get_redis_client()
+                redis_client.set(f"task:{task_id}", task.to_json())
+                redis_client.set(f"parse_result:{document_id}", json.dumps(result.__dict__))
+                
+                # 添加到文档任务集合
+                redis_client.sadd(f"document_tasks:{document_id}", task_id)
+                logger.info(f"Stored parsing result for document {document_id} with task {task_id}")
             
-            # 添加到文档任务集合
-            redis_client.sadd(f"document_tasks:{document_id}", task_id)
-            logger.info(f"Stored parsing result for document {document_id} with task {task_id}")
+            # 计算处理时间
+            process_time = time.time() - start_time
+            
+            # 返回结果
+            return {
+                "success": True,
+                "document_id": document_id,
+                "task_id": task_id,
+                "result": result.__dict__,
+                "process_time_ms": int(process_time * 1000)
+            }
         
-        # 计算处理时间
-        process_time = time.time() - start_time
-        
-        # 返回结果
-        return {
-            "success": True,
-            "document_id": document_id,
-            "task_id": task_id,
-            "result": result.__dict__,
-            "process_time_ms": int(process_time * 1000)
-        }
-        
+        finally:
+            # 清理临时文件
+            if is_temp and local_temp_path and os.path.exists(local_temp_path):
+                try:
+                    os.remove(local_temp_path)
+                    logger.info(f"Removed temporary file: {local_temp_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to remove temporary file {local_temp_path}: {str(e)}")
+            
     except HTTPException:
         raise
     except Exception as e:
@@ -180,6 +194,7 @@ async def get_document_parse_result(
     - document_id: 文档ID
     - task_id: 可选的任务ID，如果提供则从该任务中获取结果
     """
+    # 这个函数主要是从Redis获取数据，不需要太多修改
     try:
         redis_client = get_redis_client()
         

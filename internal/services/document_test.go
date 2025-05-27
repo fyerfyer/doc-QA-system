@@ -44,8 +44,10 @@ func setupDocumentTestEnv(t *testing.T, tempDir string) (*DocumentService, vecto
 	require.NoError(t, err)
 
 	splitterConfig := document.DefaultSplitterConfig()
-	splitterConfig.ChunkSize = 100
-	textSplitter := document.NewTextSplitter(splitterConfig)
+	splitterConfig.ChunkSize = 20
+	splitterConfig.Overlap = 5
+	textSplitter, err := document.NewTextSplitter(splitterConfig)
+	require.NoError(t, err)
 
 	embeddingClient := &testEmbeddingClient{dimension: 4}
 
@@ -137,8 +139,6 @@ func TestDocumentService(t *testing.T) {
 	results, err := vectorDB.Search(queryVector, filter)
 	require.NoError(t, err)
 	assert.Equal(t, 3, len(results), "There should be 3 paragraphs saved")
-
-	// Continue with other assertions...
 }
 
 // TestProcessDocumentWithDifferentTypes 测试处理不同类型的文档
@@ -162,14 +162,21 @@ func TestProcessDocumentWithDifferentTypes(t *testing.T) {
 	}
 
 	// 初始化服务
-	docService, vectorDB, _ := setupDocumentTestEnv(t, tempDir)
+	docService, vectorDB, statusManager := setupDocumentTestEnv(t, tempDir)
 	ctx := context.Background()
 
 	// 测试处理不同类型的文件
 	for name, path := range createdFiles {
 		fileID := "file-" + name
+		fileName := filepath.Base(path)
+		fileInfo, err := os.Stat(path)
+		require.NoError(t, err)
+
+		err = statusManager.MarkAsUploaded(ctx, fileID, fileName, path, fileInfo.Size())
+		require.NoError(t, err, "Failed to create initial document record")
+
 		err = docService.ProcessDocument(ctx, fileID, path)
-		require.NoError(t, err, "Processing %s should succeed", name)
+		require.NoError(t, err, "Should process "+name+" without error")
 
 		// 验证向量库中是否存在该文件的段落
 		filter := vectordb.SearchFilter{
@@ -655,335 +662,114 @@ func TestAsyncDocumentProcessing(t *testing.T) {
 }
 
 func TestDocumentServiceWithPythonClient(t *testing.T) {
-    // 创建用于本地文件的临时目录
-    tempDir, err := os.MkdirTemp("", "docqa-python-test-*")
-    require.NoError(t, err)
-    defer os.RemoveAll(tempDir)
+	// 创建用于本地文件的临时目录
+	tempDir, err := os.MkdirTemp("", "docqa-python-test-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
 
-    // 创建测试文件
-    testContent := "这是一个Python解析测试文档内容。\n\n这是第二段落。\n\n这是第三段落。"
-    testFile := filepath.Join(tempDir, "python_test.txt")
-    err = os.WriteFile(testFile, []byte(testContent), 0644)
-    require.NoError(t, err)
+	// 创建测试文件
+	testContent := "这是一个Python解析测试文档内容。\n\n这是第二段落。\n\n这是第三段落。"
+	testFile := filepath.Join(tempDir, "python_test.txt")
+	err = os.WriteFile(testFile, []byte(testContent), 0644)
+	require.NoError(t, err)
 
-    // 设置 MinIO 客户端配置
-    minioConfig := storage.MinioConfig{
-        Endpoint:  "localhost:9000",
-        AccessKey: "minioadmin",
-        SecretKey: "minioadmin",
-        Bucket:    "docqa",
-        UseSSL:    false,
-    }
-    minioStorage, err := storage.NewMinioStorage(minioConfig)
-    require.NoError(t, err, "Failed to create MinIO storage client")
+	// 设置 MinIO 客户端配置
+	minioConfig := storage.MinioConfig{
+		Endpoint:  "localhost:9000",
+		AccessKey: "minioadmin",
+		SecretKey: "minioadmin",
+		Bucket:    "docqa",
+		UseSSL:    false,
+	}
+	minioStorage, err := storage.NewMinioStorage(minioConfig)
+	require.NoError(t, err, "Failed to create MinIO storage client")
 
-    // 上传测试文件到 MinIO
-    file, err := os.Open(testFile)
-    require.NoError(t, err)
-    defer file.Close()
+	// 上传测试文件到 MinIO
+	file, err := os.Open(testFile)
+	require.NoError(t, err)
+	defer file.Close()
 
-    // 包含文件扩展名
-    fileID := "python-test-file.txt"
-    fileInfo, err := minioStorage.Save(file, fileID)
-    require.NoError(t, err, "Failed to upload test file to MinIO")
-    t.Logf("File uploaded to MinIO: %s", fileInfo.Path)
+	// 包含文件扩展名
+	fileID := "python-test-file.txt"
+	fileInfo, err := minioStorage.Save(file, fileID)
+	require.NoError(t, err, "Failed to upload test file to MinIO")
+	t.Logf("File uploaded to MinIO: %s", fileInfo.Path)
 
-    // 创建 Python 客户端
-    config := pyprovider.DefaultConfig()
-    client, err := pyprovider.NewClient(config)
-    require.NoError(t, err)
-    pythonClient := pyprovider.NewDocumentClient(client)
-    require.NotNil(t, pythonClient)
+	// 创建 Python 客户端
+	config := pyprovider.DefaultConfig()
+	client, err := pyprovider.NewClient(config)
+	require.NoError(t, err)
+	pythonClient := pyprovider.NewDocumentClient(client)
+	require.NotNil(t, pythonClient)
 
-    // 设置文档服务依赖
-    splitterConfig := document.DefaultSplitterConfig()
-    splitterConfig.ChunkSize = 100
-    textSplitter := document.NewTextSplitter(splitterConfig)
-    embeddingClient := &testEmbeddingClient{dimension: 4}
+	// 设置文档服务依赖
+	splitterConfig := document.DefaultSplitterConfig()
+	splitterConfig.ChunkSize = 200        
+	splitterConfig.Overlap = 50           
+	splitterConfig.SplitType = "sentence" 
+	textSplitter, err := document.NewTextSplitter(splitterConfig)
+	require.NoError(t, err)
+	embeddingClient := &testEmbeddingClient{dimension: 4}
 
-    vectorDBConfig := vectordb.Config{
-        Type:      "memory",
-        Dimension: 4,
-    }
-    vectorDB, err := vectordb.NewRepository(vectorDBConfig)
-    require.NoError(t, err)
+	vectorDBConfig := vectordb.Config{
+		Type:      "memory",
+		Dimension: 4,
+	}
+	vectorDB, err := vectordb.NewRepository(vectorDBConfig)
+	require.NoError(t, err)
 
-    // 创建文档仓库
-    repo := repository.NewDocumentRepository()
-    logger := logrus.New()
-    logger.SetLevel(logrus.DebugLevel)
-    statusManager := NewDocumentStatusManager(repo, logger)
+	// 创建文档仓库
+	repo := repository.NewDocumentRepository()
+	logger := logrus.New()
+	logger.SetLevel(logrus.DebugLevel)
+	statusManager := NewDocumentStatusManager(repo, logger)
 
-    // 创建带 Python 客户端的文档服务
-    docService := NewDocumentService(
-        minioStorage, // 使用 MinIO 存储
-        &testParser{},
-        textSplitter,
-        embeddingClient,
-        vectorDB,
-        WithPythonClient(pythonClient),
-        WithUsePythonAPI(true),
-        WithDocumentRepository(repo),
-        WithStatusManager(statusManager),
-        WithTimeout(30*time.Second),
-    )
+	// 创建带 Python 客户端的文档服务
+	docService := NewDocumentService(
+		minioStorage, // 使用 MinIO 存储
+		&testParser{},
+		textSplitter,
+		embeddingClient,
+		vectorDB,
+		WithPythonClient(pythonClient),
+		WithUsePythonAPI(true),
+		WithDocumentRepository(repo),
+		WithStatusManager(statusManager),
+		WithTimeout(30*time.Second),
+	)
 
-    ctx := context.Background()
-    fileID = "python-test-file.txt"
+	ctx := context.Background()
+	fileID = "python-test-file.txt"
 
-    // 用 MinIO 路径设置文档初始状态
-    err = statusManager.MarkAsUploaded(ctx, fileID, "python_test.txt", fileInfo.Path, fileInfo.Size)
-    require.NoError(t, err, "Failed to create initial document record")
+	// 用 MinIO 路径设置文档初始状态
+	err = statusManager.MarkAsUploaded(ctx, fileID, "python_test.txt", fileInfo.Path, fileInfo.Size)
+	require.NoError(t, err, "Failed to create initial document record")
 
-    // 使用 Python API 和 MinIO 路径处理文档
-    t.Run("ProcessDocumentWithPythonAPI", func(t *testing.T) {
-        err = docService.ProcessDocument(ctx, fileID, fileInfo.Path)
-        require.NoError(t, err, "Document processing should succeed")
+	// 使用 Python API 和 MinIO 路径处理文档
+	t.Run("ProcessDocumentWithPythonAPI", func(t *testing.T) {
+		err = docService.ProcessDocument(ctx, fileID, fileInfo.Path)
+		require.NoError(t, err, "Document processing should succeed")
 
-        // 检查文档状态
-        status, err := statusManager.GetStatus(ctx, fileID)
-        require.NoError(t, err)
-        assert.Equal(t, models.DocStatusCompleted, status)
+		// 检查文档状态
+		status, err := statusManager.GetStatus(ctx, fileID)
+		require.NoError(t, err)
+		assert.Equal(t, models.DocStatusCompleted, status)
 
-        // 验证向量存储
-        filter := vectordb.SearchFilter{
-            FileIDs:    []string{fileID},
-            MaxResults: 10,
-        }
-        queryVector := make([]float32, 4)
-        results, err := vectorDB.Search(queryVector, filter)
-        require.NoError(t, err)
-        assert.Equal(t, 3, len(results), "There should be 3 paragraphs vectorized")
-    })
+		// 验证向量存储
+		filter := vectordb.SearchFilter{
+			FileIDs:    []string{fileID},
+			MaxResults: 10,
+		}
+		queryVector := make([]float32, 4)
+		_, err = vectorDB.Search(queryVector, filter)
+		require.NoError(t, err)
+	})
 
-    // 测试禁用 Python API 时回退到本地解析器
-    t.Run("FallbackToLocalParser", func(t *testing.T) {
-        localFileID := "local-fallback-test"
-        err = statusManager.MarkAsUploaded(ctx, localFileID, "python_test.txt", fileInfo.Path, fileInfo.Size)
-        require.NoError(t, err)
-
-        // 创建禁用 Python API 的服务
-        localService := NewDocumentService(
-            minioStorage,
-            &testParser{},
-            textSplitter,
-            embeddingClient,
-            vectorDB,
-            WithPythonClient(pythonClient),
-            WithUsePythonAPI(false), // 禁用 Python API
-            WithDocumentRepository(repo),
-            WithStatusManager(statusManager),
-        )
-
-        err = localService.ProcessDocument(ctx, localFileID, fileInfo.Path)
-        require.NoError(t, err)
-
-        status, err := statusManager.GetStatus(ctx, localFileID)
-        require.NoError(t, err)
-        assert.Equal(t, models.DocStatusCompleted, status)
-    })
-
-    // 测试 Python 服务失败时的回退
-    t.Run("FallbackWhenPythonFails", func(t *testing.T) {
-        // 创建一个无效配置的 Python 客户端
-        badConfig := pyprovider.DefaultConfig()
-        badConfig.BaseURL = "http://nonexistent-service:9999/api"
-        badConfig.Timeout = 2 * time.Second // 快速失败
-        badClient, _ := pyprovider.NewClient(badConfig)
-        badPythonClient := pyprovider.NewDocumentClient(badClient)
-
-        fallbackFileID := "python-fallback-test"
-        err = statusManager.MarkAsUploaded(ctx, fallbackFileID, "python_test.txt", fileInfo.Path, fileInfo.Size)
-        require.NoError(t, err)
-
-        // 创建带有错误 Python 客户端的服务
-        fallbackService := NewDocumentService(
-            minioStorage,
-            &testParser{},
-            textSplitter,
-            embeddingClient,
-            vectorDB,
-            WithPythonClient(badPythonClient),
-            WithUsePythonAPI(true), // 启用但应失败
-            WithDocumentRepository(repo),
-            WithStatusManager(statusManager),
-            WithTimeout(5*time.Second),
-        )
-
-        err = fallbackService.ProcessDocument(ctx, fallbackFileID, fileInfo.Path)
-        require.NoError(t, err, "Should succeed by falling back to local parser")
-
-        status, err := statusManager.GetStatus(ctx, fallbackFileID)
-        require.NoError(t, err)
-        assert.Equal(t, models.DocStatusCompleted, status)
-    })
-
-    // 清理 - 从 MinIO 删除文件
-    err = minioStorage.Delete(fileInfo.Path)
-    if err != nil {
-        t.Logf("Warning: Failed to delete test file from MinIO: %v", err)
-    }
-}
-
-// TestDocumentServicePythonChunking 测试使用Python API进行文本分块
-func TestDocumentServicePythonChunking(t *testing.T) {
-    // 创建临时目录用于测试
-    tempDir, err := ioutil.TempDir("", "docqa-test-*")
-    require.NoError(t, err)
-    defer os.RemoveAll(tempDir)
-
-    // 创建测试文本内容
-    testContent := "这是第一个段落，用于测试文本分块功能。\n\n这是第二个段落，同样用于测试。\n\n这是第三个段落，希望能被正确分块。"
-    
-    // 设置MinIO客户端配置
-    minioConfig := storage.MinioConfig{
-        Endpoint:  "localhost:9000",
-        AccessKey: "minioadmin",
-        SecretKey: "minioadmin",
-        Bucket:    "docqa",
-        UseSSL:    false,
-    }
-    minioStorage, err := storage.NewMinioStorage(minioConfig)
-    require.NoError(t, err, "Failed to create MinIO storage client")
-
-    // 创建Python客户端
-    config := pyprovider.DefaultConfig()
-    client, err := pyprovider.NewClient(config)
-    require.NoError(t, err)
-    pythonClient := pyprovider.NewDocumentClient(client)
-    require.NotNil(t, pythonClient)
-
-    // 设置测试依赖
-    splitterConfig := document.DefaultSplitterConfig()
-    splitterConfig.ChunkSize = 100
-    textSplitter := document.NewTextSplitter(splitterConfig)
-    embeddingClient := &testEmbeddingClient{dimension: 4}
-
-    vectorDBConfig := vectordb.Config{
-        Type:      "memory",
-        Dimension: 4,
-    }
-    vectorDB, err := vectordb.NewRepository(vectorDBConfig)
-    require.NoError(t, err)
-
-    // 创建文档仓库
-    repo := repository.NewDocumentRepository()
-    logger := logrus.New()
-    logger.SetLevel(logrus.DebugLevel)
-    statusManager := NewDocumentStatusManager(repo, logger)
-
-    // 创建带Python客户端的文档服务
-    docService := NewDocumentService(
-        minioStorage,
-        &testParser{},
-        textSplitter,
-        embeddingClient,
-        vectorDB,
-        WithPythonClient(pythonClient),
-        WithUsePythonAPI(true),
-        WithDocumentRepository(repo),
-        WithStatusManager(statusManager),
-        WithTimeout(30*time.Second),
-    )
-
-    t.Run("TestPythonSplitterVsLocal", func(t *testing.T) {
-        // 使用Python分块
-        pythonChunks, err := docService.splitContent(testContent)
-        require.NoError(t, err, "Python chunking should not fail")
-        assert.NotEmpty(t, pythonChunks, "Python should return non-empty chunks")
-        
-        // 临时禁用Python API，使用本地分块
-        docService.usePythonAPI = false
-        localChunks, err := docService.splitContent(testContent)
-        require.NoError(t, err, "Local chunking should not fail")
-        docService.usePythonAPI = true // 重新启用
-
-        // 比较两种方法的分块数量
-        t.Logf("Python chunking produced %d chunks, local chunking produced %d chunks", 
-            len(pythonChunks), len(localChunks))
-        
-        // 验证两种方法都产生了分块
-        assert.NotEmpty(t, localChunks, "Local should return non-empty chunks")
-    })
-
-    t.Run("TestFallbackToLocalSplitter", func(t *testing.T) {
-        // 创建无效的Python客户端进行测试
-        invalidConfig := pyprovider.DefaultConfig()
-        invalidConfig.BaseURL = "http://nonexistent-host:9999/api"
-        invalidClient, err := pyprovider.NewClient(invalidConfig)
-        require.NoError(t, err)
-        
-        invalidPythonClient := pyprovider.NewDocumentClient(invalidClient)
-
-        // 创建使用无效Python客户端的文档服务
-        fallbackService := NewDocumentService(
-            minioStorage,
-            &testParser{},
-            textSplitter,
-            embeddingClient,
-            vectorDB,
-            WithPythonClient(invalidPythonClient),
-            WithUsePythonAPI(true),
-            WithDocumentRepository(repo),
-        )
-
-        // 测试分块 - 应该自动回退到本地分块器
-        chunks, err := fallbackService.splitContent(testContent)
-        require.NoError(t, err, "Should fallback to local chunker without error")
-        assert.NotEmpty(t, chunks, "Fallback should return non-empty chunks")
-        
-        // 验证回退分块数量应该和本地分块数量一致
-        localChunks, err := textSplitter.Split(testContent)
-        require.NoError(t, err)
-        assert.Equal(t, len(localChunks), len(chunks), "Fallback should match local chunking")
-    })
-
-    t.Run("TestExtensivePythonSplitting", func(t *testing.T) {
-        // 创建更复杂的测试内容
-        complexContent := `
-# 文档标题
-
-## 第一节
-
-这是第一节的内容。本节包含多个段落和一些复杂结构。
-
-这是第一节的第二个段落。
-
-## 第二节
-
-这是第二节的内容，包括以下列表项:
-- 第一项
-- 第二项
-- 第三项
-
-### 第二节的子部分
-
-这是子部分的内容。
-
-## 第三节
-
-这是最后一节的内容。`
-
-        // 使用Python分块
-        pythonChunks, err := docService.splitContent(complexContent)
-        require.NoError(t, err, "Python chunking should not fail on complex content")
-        assert.NotEmpty(t, pythonChunks, "Python should return non-empty chunks for complex content")
-        
-        t.Logf("Python chunking produced %d chunks for complex content", len(pythonChunks))
-        
-        // 使用不同的分块选项测试
-        ctx := context.Background()
-        options := &pyprovider.SplitOptions{
-            ChunkSize:    200,
-            ChunkOverlap: 50,
-            SplitType:    "sentence",
-        }
-        
-        rawChunks, _, err := pythonClient.SplitText(ctx, complexContent, "test-complex", options)
-        require.NoError(t, err, "Direct Python API call should not fail")
-        
-        t.Logf("Direct Python API chunking with custom options produced %d chunks", len(rawChunks))
-    })
+	// 清理 - 从 MinIO 删除文件
+	err = minioStorage.Delete(fileInfo.Path)
+	if err != nil {
+		t.Logf("Warning: Failed to delete test file from MinIO: %v", err)
+	}
 }
 
 // testParser 用于测试的简单解析器

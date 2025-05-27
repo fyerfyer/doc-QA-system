@@ -70,7 +70,7 @@ func (c *DocumentClient) ParseDocument(ctx context.Context, filePath string) (*D
     reqURL := fmt.Sprintf("%s%s", c.client.GetConfig().BaseURL, reqPath)
     req, err := http.NewRequestWithContext(ctx, "POST", reqURL, strings.NewReader(formData.Encode()))
     if err != nil {
-        return nil, fmt.Errorf("创建请求失败: %w", err)
+        return nil, fmt.Errorf("failed to create request: %w", err)
     }
 
     // 设置请求头
@@ -81,24 +81,24 @@ func (c *DocumentClient) ParseDocument(ctx context.Context, filePath string) (*D
     httpClient := &http.Client{Timeout: c.client.GetConfig().Timeout}
     resp, err := httpClient.Do(req)
     if err != nil {
-        return nil, fmt.Errorf("发送请求失败: %w", err)
+        return nil, fmt.Errorf("failed to send request: %w", err)
     }
     defer resp.Body.Close()
 
     // 检查状态码
     if resp.StatusCode != http.StatusOK {
         body, _ := io.ReadAll(resp.Body)
-        return nil, fmt.Errorf("API调用失败(状态码: %d): %s", resp.StatusCode, string(body))
+        return nil, fmt.Errorf("API call failed (status code: %d): %s", resp.StatusCode, string(body))
     }
 
     // 解析响应
     if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-        return nil, fmt.Errorf("解析响应失败: %w", err)
+        return nil, fmt.Errorf("failed to parse response: %w", err)
     }
 
     // 检查API响应是否成功
     if !response.Success {
-        return nil, fmt.Errorf("文档解析失败: %s", response.Result.Content)
+        return nil, fmt.Errorf("document parsing failed: %s", response.Result.Content)
     }
 
     return &response.Result, nil
@@ -115,28 +115,28 @@ func (c *DocumentClient) ParseDocumentWithReader(ctx context.Context, reader io.
 
     // 添加文档ID字段
     if err := writer.WriteField("document_id", documentID); err != nil {
-        return nil, fmt.Errorf("添加document_id字段失败: %w", err)
+        return nil, fmt.Errorf("failed to add document_id field: %w", err)
     }
 
     // 添加store_result字段
     if err := writer.WriteField("store_result", "true"); err != nil {
-        return nil, fmt.Errorf("添加store_result字段失败: %w", err)
+        return nil, fmt.Errorf("failed to add store_result field: %w", err)
     }
 
     // 添加文件内容
     part, err := writer.CreateFormFile("file", fileName)
     if err != nil {
-        return nil, fmt.Errorf("创建文件表单字段失败: %w", err)
+        return nil, fmt.Errorf("failed to create file form field: %w", err)
     }
 
     // 从reader复制数据到请求体
     if _, err := io.Copy(part, reader); err != nil {
-        return nil, fmt.Errorf("复制文件数据失败: %w", err)
+        return nil, fmt.Errorf("failed to copy file data: %w", err)
     }
 
     // 完成multipart表单
     if err := writer.Close(); err != nil {
-        return nil, fmt.Errorf("关闭表单写入器失败: %w", err)
+        return nil, fmt.Errorf("failed to close form writer: %w", err)
     }
 
     // 构建请求URL
@@ -146,7 +146,7 @@ func (c *DocumentClient) ParseDocumentWithReader(ctx context.Context, reader io.
     reqURL := fmt.Sprintf("%s%s", c.client.GetConfig().BaseURL, reqPath)
     req, err := http.NewRequestWithContext(ctx, "POST", reqURL, &requestBody)
     if err != nil {
-        return nil, fmt.Errorf("创建请求失败: %w", err)
+        return nil, fmt.Errorf("failed to create request: %w", err)
     }
 
     // 设置请求头
@@ -157,24 +157,24 @@ func (c *DocumentClient) ParseDocumentWithReader(ctx context.Context, reader io.
     httpClient := &http.Client{Timeout: c.client.GetConfig().Timeout}
     resp, err := httpClient.Do(req)
     if err != nil {
-        return nil, fmt.Errorf("发送请求失败: %w", err)
+        return nil, fmt.Errorf("failed to send request: %w", err)
     }
     defer resp.Body.Close()
 
     // 检查状态码
     if resp.StatusCode != http.StatusOK {
         body, _ := io.ReadAll(resp.Body)
-        return nil, fmt.Errorf("API调用失败(状态码: %d): %s", resp.StatusCode, string(body))
+        return nil, fmt.Errorf("API call failed (status code: %d): %s", resp.StatusCode, string(body))
     }
 
     // 解析响应
     if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-        return nil, fmt.Errorf("解析响应失败: %w", err)
+        return nil, fmt.Errorf("failed to parse response: %w", err)
     }
 
     // 检查API响应是否成功
     if !response.Success {
-        return nil, fmt.Errorf("文档解析失败: %s", response.Result.Content)
+        return nil, fmt.Errorf("document parsing failed: %s", response.Result.Content)
     }
 
     return &response.Result, nil
@@ -205,11 +205,11 @@ func (c *DocumentClient) GetDocumentContent(ctx context.Context, documentID stri
 
     err := c.client.Get(ctx, reqPath, &response)
     if err != nil {
-        return nil, fmt.Errorf("获取文档内容失败: %w", err)
+        return nil, fmt.Errorf("failed to get document content: %w", err)
     }
 
     if !response.Success {
-        return nil, fmt.Errorf("获取文档内容失败: 请求成功但API返回失败状态")
+        return nil, fmt.Errorf("failed to get document content: request successful but API returned failure status")
     }
 
     return &response.Result, nil

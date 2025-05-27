@@ -39,6 +39,8 @@ refactor.txt
 
 # Logs
 *.log
+/logs
+/logs/
 
 # Virtualenv
 /.venv/
@@ -53,3 +55,5 @@ __pycache__/
 
 /myenv/
 myenv/
+qa-doc/
+/qa-doc/
