@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/fyerfyer/doc-QA-system/internal/pyprovider"
 )
 
 // DefaultRAGTemplate 默认RAG提示词模板
@@ -263,4 +265,100 @@ func (r *RAGService) SetEmptyTemplate(template string) *RAGService {
 	r.config.EmptyTemplate = template
 	r.mu.Unlock()
 	return r
+}
+
+// PythonRAGService 实现通过Python API的RAG服务
+type PythonRAGService struct {
+	llmClient *pyprovider.LLMClient
+	config    *RAGConfig
+	mu        sync.RWMutex // 配置互斥锁
+}
+
+// NewPythonRAG 创建新的Python RAG服务
+func NewPythonRAG(client *pyprovider.LLMClient, opts ...RAGOption) *PythonRAGService {
+	cfg := DefaultRAGConfig()
+	for _, opt := range opts {
+		opt(cfg)
+	}
+
+	return &PythonRAGService{
+		llmClient: client,
+		config:    cfg,
+	}
+}
+
+// Answer 通过Python API生成基于上下文的回答
+func (r *PythonRAGService) Answer(ctx context.Context, question string, contexts []string) (*RAGResponse, error) {
+	if question == "" {
+		return nil, NewLLMError(ErrCodeEmptyPrompt, "question cannot be empty")
+	}
+
+	r.mu.RLock()
+	cfg := r.config
+	r.mu.RUnlock()
+
+	// 创建带超时的上下文
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, cfg.Timeout)
+	defer cancel()
+
+	// 准备RAG选项
+	var options []pyprovider.RAGOption
+
+	// 设置基本选项
+	options = append(options,
+		pyprovider.WithRAGMaxTokens(cfg.MaxTokens),
+		pyprovider.WithRAGTemperature(float64(cfg.Temperature)),
+		pyprovider.WithTopK(5), // 默认值
+	)
+
+	// 启用引用（如果配置中要求）
+	if cfg.IncludeSources {
+		options = append(options, pyprovider.WithEnableCitation(true))
+	}
+
+	// 调用Python API
+	response, err := r.llmClient.Answer(ctxWithTimeout, question, options...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate response via Python API: %w", err)
+	}
+
+	// 转换源引用
+	sources := make([]SourceReference, len(response.Sources))
+	for i, src := range response.Sources {
+		sources[i] = SourceReference{
+			ID:       fmt.Sprintf("src-%d", i+1),
+			Content:  src.Text,
+			Metadata: src.Metadata,
+		}
+
+		// 如果有文档ID，添加到源引用中
+		if src.DocumentID != "" {
+			sources[i].ID = src.DocumentID
+		}
+	}
+
+	// 构建RAG响应
+	ragResponse := &RAGResponse{
+		Answer:  response.Text,
+		Sources: sources,
+	}
+
+	return ragResponse, nil
+}
+
+// 下面添加创建Python RAG服务的便捷函数
+
+// NewRAGWithPython 创建使用Python API的RAG服务
+func NewRAGWithPython(pyConfig *pyprovider.PyServiceConfig, opts ...RAGOption) (*PythonRAGService, error) {
+	// 创建HTTP客户端
+	httpClient, err := pyprovider.NewClient(pyConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Python client: %w", err)
+	}
+
+	// 创建LLM客户端
+	llmClient := pyprovider.NewLLMClient(httpClient)
+
+	// 创建RAG服务
+	return NewPythonRAG(llmClient, opts...), nil
 }

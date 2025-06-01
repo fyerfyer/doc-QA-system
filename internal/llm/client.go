@@ -2,7 +2,10 @@ package llm
 
 import (
 	"context"
+	"fmt"
 	"time"
+
+	"github.com/fyerfyer/doc-QA-system/internal/pyprovider"
 )
 
 // Client 大模型客户端接口
@@ -116,11 +119,12 @@ type GenerateOption func(*GenerateOptions)
 
 // GenerateOptions 生成请求的选项集合
 type GenerateOptions struct {
-	MaxTokens   *int     // 最大生成Token数
-	Temperature *float32 // 采样温度
-	TopP        *float32 // 核采样概率阈值
-	TopK        *int     // 生成候选集大小
-	Stream      bool     // 是否流式输出
+	MaxTokens   *int      // 最大生成Token数
+	Temperature *float32  // 采样温度
+	TopP        *float32  // 核采样概率阈值
+	TopK        *int      // 生成候选集大小
+	Stream      bool      // 是否流式输出
+	Stop        *[]string // 停止序列
 }
 
 // WithGenerateMaxTokens 设置生成请求的最大Token数
@@ -158,16 +162,31 @@ func WithGenerateStream(stream bool) GenerateOption {
 	}
 }
 
+// WithGenerateStop 设置生成请求的停止序列
+func WithGenerateStop(stop []string) GenerateOption {
+	return func(o *GenerateOptions) {
+		o.Stop = &stop
+	}
+}
+
 // ChatOption 聊天请求的选项
 type ChatOption func(*ChatOptions)
 
 // ChatOptions 聊天请求的选项集合
 type ChatOptions struct {
-	MaxTokens   *int     // 最大生成Token数
-	Temperature *float32 // 采样温度
-	TopP        *float32 // 核采样概率阈值
-	TopK        *int     // 生成候选集大小
-	Stream      bool     // 是否流式输出
+    MaxTokens   *int      // 最大生成Token数
+    Temperature *float32  // 采样温度
+    TopP        *float32  // 核采样概率阈值
+    TopK        *int      // 生成候选集大小
+    Stream      bool      // 是否流式输出
+    Stop        *[]string // 停止序列
+}
+
+// WithChatStop 设置聊天请求的停止序列
+func WithChatStop(stop []string) ChatOption {
+    return func(o *ChatOptions) {
+        o.Stop = &stop
+    }
 }
 
 // WithChatMaxTokens 设置聊天请求的最大Token数
@@ -225,4 +244,176 @@ func NewClient(name string, opts ...Option) (Client, error) {
 			"llm client type not registered: "+name)
 	}
 	return factory(opts...)
+}
+
+// PythonClient 通过Python服务提供的API实现LLM功能
+type PythonClient struct {
+	llmClient   *pyprovider.LLMClient
+	modelName   string
+	maxTokens   int
+	temperature float32
+	topP        float32
+}
+
+// NewPythonClient 创建新的Python LLM客户端
+func NewPythonClient(opts ...Option) (Client, error) {
+	// 创建配置
+	cfg := NewConfig(opts...)
+
+	// 创建基础HTTP客户端
+	pyConfig := &pyprovider.PyServiceConfig{}
+
+	// 使用配置的BaseURL，如果为空则使用默认值
+	if cfg.BaseURL != "" {
+		pyConfig.WithBaseURL(cfg.BaseURL)
+	}
+
+	// 设置超时
+	pyConfig.WithTimeout(cfg.Timeout)
+
+	// 创建HTTP客户端
+	httpClient, err := pyprovider.NewClient(pyConfig)
+	if err != nil {
+		return nil, NewLLMError(ErrCodeServerError, fmt.Sprintf("failed to create Python client: %v", err))
+	}
+
+	// 创建LLM客户端
+	llmClient := pyprovider.NewLLMClient(httpClient)
+
+	client := &PythonClient{
+		llmClient:   llmClient,
+		modelName:   cfg.Model,
+		maxTokens:   cfg.MaxTokens,
+		temperature: cfg.Temperature,
+		topP:        cfg.TopP,
+	}
+
+	return client, nil
+}
+
+// Name 返回模型名称
+func (c *PythonClient) Name() string {
+	return c.modelName
+}
+
+// Generate 根据提示词生成回答
+func (c *PythonClient) Generate(ctx context.Context, prompt string, options ...GenerateOption) (*Response, error) {
+	if prompt == "" {
+		return nil, NewLLMError(ErrCodeEmptyPrompt, ErrMsgEmptyPrompt)
+	}
+
+	// 应用选项
+	opts := &GenerateOptions{}
+	for _, opt := range options {
+		opt(opts)
+	}
+
+	// 准备Python API的选项
+	var pyOptions []pyprovider.GenerateOption
+
+	// 设置模型
+	pyOptions = append(pyOptions, pyprovider.WithModel(c.modelName))
+
+	// 转换选项
+	if opts.MaxTokens != nil {
+		pyOptions = append(pyOptions, pyprovider.WithMaxTokens(*opts.MaxTokens))
+	} else if c.maxTokens > 0 {
+		pyOptions = append(pyOptions, pyprovider.WithMaxTokens(c.maxTokens))
+	}
+
+	if opts.Temperature != nil {
+		pyOptions = append(pyOptions, pyprovider.WithTemperature(float64(*opts.Temperature)))
+	} else if c.temperature > 0 {
+		pyOptions = append(pyOptions, pyprovider.WithTemperature(float64(c.temperature)))
+	}
+
+	if opts.Stop != nil {
+		pyOptions = append(pyOptions, pyprovider.WithStop(*opts.Stop))
+	}
+
+	// 调用Python API
+	textResponse, err := c.llmClient.Generate(ctx, prompt, pyOptions...)
+	if err != nil {
+		return nil, WrapError(err, ErrCodeServerError)
+	}
+
+	// 转换响应格式
+	return &Response{
+		Text:       textResponse.Text,
+		TokenCount: textResponse.TotalTokens,
+		ModelName:  textResponse.Model,
+		FinishTime: time.Now(),
+	}, nil
+}
+
+// Chat 进行多轮对话
+func (c *PythonClient) Chat(ctx context.Context, messages []Message, options ...ChatOption) (*Response, error) {
+	if len(messages) == 0 {
+		return nil, NewLLMError(ErrCodeInvalidRequest, "messages cannot be empty")
+	}
+
+	// 应用选项
+	opts := &ChatOptions{}
+	for _, opt := range options {
+		opt(opts)
+	}
+
+	// 转换消息格式
+	pyMessages := make([]pyprovider.Message, len(messages))
+	for i, msg := range messages {
+		pyMessages[i] = pyprovider.Message{
+			Role:    string(msg.Role),
+			Content: msg.Content,
+			Name:    msg.Name,
+		}
+	}
+
+	// 准备Python API的选项
+	var pyOptions []pyprovider.ChatOption
+
+	// 设置模型
+	pyOptions = append(pyOptions, pyprovider.WithChatModel(c.modelName))
+
+	// 转换选项
+	if opts.MaxTokens != nil {
+		pyOptions = append(pyOptions, pyprovider.WithChatMaxTokens(*opts.MaxTokens))
+	} else if c.maxTokens > 0 {
+		pyOptions = append(pyOptions, pyprovider.WithChatMaxTokens(c.maxTokens))
+	}
+
+	if opts.Temperature != nil {
+		pyOptions = append(pyOptions, pyprovider.WithChatTemperature(float64(*opts.Temperature)))
+	} else if c.temperature > 0 {
+		pyOptions = append(pyOptions, pyprovider.WithChatTemperature(float64(c.temperature)))
+	}
+
+	if opts.Stop != nil {
+		pyOptions = append(pyOptions, pyprovider.WithChatStop(*opts.Stop))
+	}
+
+	// 调用Python API
+	textResponse, err := c.llmClient.Chat(ctx, pyMessages, pyOptions...)
+	if err != nil {
+		return nil, WrapError(err, ErrCodeServerError)
+	}
+
+	// 转换响应中的消息（如果有）
+	responseMessage := Message{
+		Role:    RoleAssistant,
+		Content: textResponse.Text,
+	}
+
+	// 转换响应格式
+	return &Response{
+		Text:       textResponse.Text,
+		Messages:   []Message{responseMessage},
+		TokenCount: textResponse.TotalTokens,
+		ModelName:  textResponse.Model,
+		FinishTime: time.Now(),
+	}, nil
+}
+
+// 在包初始化时注册Python客户端
+func init() {
+	RegisterClient("python", NewPythonClient)
 }

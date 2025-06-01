@@ -2,13 +2,11 @@ package llm
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
-	"github.com/stretchr/testify/require"
 )
 
 // TestMockClientGenerate 测试使用Mock客户端的文本生成
@@ -113,38 +111,29 @@ func TestMockClientName(t *testing.T) {
 	assert.Equal(t, "mock-model", name)
 }
 
-// TestTongyiClientIntegration 测试通义千问客户端集成
-// 只有在设置TONGYI_API_KEY环境变量时才运行
-func TestTongyiClientIntegration(t *testing.T) {
-	apiKey := os.Getenv("TONGYI_API_KEY")
-	if apiKey == "" {
-		t.Skip("Haven't set TONGYI_API_KEY environment variable, skipping test")
-	}
+// TestPythonClientIntegration 测试Python客户端集成
+func TestPythonClientIntegration(t *testing.T) {
+	serviceURL := "http://localhost:8000/api"
 
-	// 使用最短超时创建客户端，节省资源
-	client, err := NewTongyiClient(
-		WithAPIKey(apiKey),
-		WithModel(ModelQwenTurbo), // 使用速度最快的模型
-		WithTimeout(10*time.Second),
+	// 使用适当的超时创建客户端
+	client, err := NewPythonClient(
+		WithBaseURL(serviceURL),
+		WithModel("default"), // 使用默认模型
+		WithTimeout(15*time.Second),
 	)
-	require.NoError(t, err, "创建客户端失败")
+	assert.NoError(t, err, "failed to create Python client")
 
-	// 使用非常短的提示词，减少token使用
+	// 使用简短的提示词，减少处理时间
 	t.Run("generate test", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 
-		resp, err := client.Generate(ctx, "你好", WithGenerateMaxTokens(5))
-		if err != nil {
-			t.Logf("API calling error: %v", err)
-			t.Skip("Skipping API test")
-			return
-		}
+		resp, err := client.Generate(ctx, "你好", WithGenerateMaxTokens(20))
+		assert.NoError(t, err, "failed to call Generate method")
 
 		// 基本验证
-		assert.NotEmpty(t, resp.Text, "Response text should not be empty")
-		assert.NotZero(t, resp.TokenCount, "Token count should be greater than 0")
-		assert.Equal(t, ModelQwenTurbo, resp.ModelName, "Model name should match")
+		assert.NotEmpty(t, resp.Text, "response text should not be empty")
+		assert.NotZero(t, resp.TokenCount, "token count should be greater than 0")
 	})
 
 	// 测试Chat方法
@@ -156,16 +145,12 @@ func TestTongyiClientIntegration(t *testing.T) {
 			{Role: RoleUser, Content: "简单问候"},
 		}
 
-		resp, err := client.Chat(ctx, messages, WithChatMaxTokens(5))
-		if err != nil {
-			t.Logf("API calling error: %v", err)
-			t.Skip("Skipping API test")
-			return
-		}
+		resp, err := client.Chat(ctx, messages, WithChatMaxTokens(20))
+		assert.NoError(t, err, "failed to call Chat method")
 
 		// 基本验证
-		assert.NotEmpty(t, resp.Text, "Response text should not be empty")
-		assert.NotZero(t, resp.TokenCount, "Token count should be greater than 0")
+		assert.NotEmpty(t, resp.Text, "response text should not be empty")
+		assert.NotZero(t, resp.TokenCount, "token count should be greater than 0")
 	})
 }
 

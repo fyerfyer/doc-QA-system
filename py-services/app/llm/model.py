@@ -127,6 +127,7 @@ class RAGRequest:
     stream: bool = False
     filter_metadata: Optional[Dict[str, Any]] = None
     context_prompt: Optional[str] = None
+    contexts: Optional[List[str]] = None
     request_id: str = field(default_factory=lambda: str(uuid.uuid4()))
 
 
